@@ -94,6 +94,36 @@ report, so the UI is mostly a *reader* over those — no re-architecture needed.
 - [ ] **Run launcher (optional)** — configure and kick off a run from the UI (provider, universe, rounds,
       N_JOBS) and show results when it finishes.
 
+## Open — execution & live trading
+
+Turn a *verified* alpha (a cross-sectional signal) into actual orders. This is a separate, higher-risk build
+than mining — **paper-trade first; backtested edges, including Alpha101, routinely vanish live.** Behind one
+broker interface so the strategy code never depends on a specific venue.
+
+- [ ] **Live signal extraction** — `signal.py`: from the admitted library + a fresh data panel, emit *today's*
+      target weights. Take the last cross-section of the top-K alphas, blend into a meta-signal, neutralize,
+      rank → dollar-neutral weights, scale to capital. (Reuses the long-short rule already in `evaluate.py`.)
+- [ ] **Portfolio construction** — multi-alpha blend (equal-risk / regression), sector/beta neutralization,
+      volatility targeting, gross/net and per-name position limits. (One alpha is fragile.)
+- [ ] **Broker adapter interface** — a thin `BrokerClient` (like `LLMClient`): `positions()`, `submit(orders)`,
+      with a **dry-run/paper** mode. Strategy emits target weights; the adapter diffs vs current holdings and
+      routes order deltas.
+- [ ] **Alpaca adapter** — official REST API with a free **paper-trading** account; the recommended first
+      venue (clean API, fractional shares, paper sandbox). Start here.
+- [ ] **Interactive Brokers adapter** — IBKR paper account via `ib_insync` / TWS API for broader universe and
+      shorting.
+- [ ] **Robinhood adapter (caution)** — no official API; only the unofficial `robin-stocks` exists. No native
+      shorting, fragile/ToS-gray, account-lock risk. Long-only, small-size, at-your-own-risk — not the primary path.
+- [ ] **Trading agent (daily loop)** — scheduled job: refresh data → recompute signal → rebalance to target →
+      log fills. Hard **safety rails**: kill switch, max gross/position/loss caps, paper-mode default, and a
+      manual confirm before any live (real-money) order.
+- [ ] **Forward-test harness** — track live/paper IC and P&L vs the backtest expectation; flag alpha decay and
+      retire signals whose IC degrades. The honest bridge between "verified" and "trusted."
+
+> **Safety & scope.** Research/educational; **not investment advice.** Live trading carries real financial
+> risk and likely regulatory/brokerage-ToS considerations. Default every adapter to paper mode; require an
+> explicit, deliberate opt-in for real-money orders.
+
 ## Open — product & reporting
 
 - [~] **Run report** — Markdown summary is written by `infra/run_job.py` (config, library, top test alphas).
