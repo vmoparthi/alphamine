@@ -65,7 +65,7 @@ the evaluator. See §6.
 | `alphamine/dsl.py`     | The alpha language: cross-sectional + time-series operators (`rank`, `delay`, `delta`, `corr`, `ts_mean`, `ts_std`, `scale`, …) implemented on pandas panels. |
 | `alphamine/alpha.py`   | `Alpha` object: holds the expression string, parses it to a signal panel via a **safe AST evaluator** (no `eval` of arbitrary Python). |
 | `alphamine/evaluate.py`| Turns a signal into performance: IC, Rank-IC, IR, a decile **long-short backtest** with costs → Sharpe, annual return, max drawdown, turnover. |
-| `alphamine/llm.py`     | `LLMClient` interface. `AnthropicClient` (real API) + `MockClient` (offline, emits a rotating set of valid alpha expressions). |
+| `alphamine/llm.py`     | `LLMClient` interface + pluggable backends: `MockClient` (offline), `AnthropicClient` (Claude API), `AnthropicBedrockClient` (Claude via AWS Bedrock), and `OpenAICompatClient` (OpenAI GPT + any OpenAI-compatible server — Ollama, vLLM, Groq, …). All share one `.propose()`. See §7.1. |
 | `alphamine/library.py` | Persistent alpha store (JSON). Admits a new alpha only if its signal correlation to every stored alpha is below a threshold → enforces **diversity**. |
 | `alphamine/miner.py`   | The loop: prompt → generate → parse → evaluate → admit/reject → build feedback → repeat. |
 | `alphamine/seeds.py`   | Small curated seed bank + `warm_start()` so you never start from a blank page. |
@@ -145,14 +145,43 @@ pip install -r requirements.txt
 # Offline demo — no API key, no internet. Synthetic data + mock LLM.
 python run_demo.py
 
-# Real run: set a key and flip the flags in run_demo.py / config.py
+# Real run: set a key and flip the flags in run_demo.py
 export ANTHROPIC_API_KEY=sk-...
-#   data.source   = "yfinance"
-#   llm.provider  = "anthropic"
+#   DATA_SOURCE  = "yfinance"
+#   LLM_PROVIDER = "anthropic"
 ```
 
 The demo prints each round's admitted/rejected alphas with scores, then the final library re-scored on the
 held-out test window, ranked by test Rank-IC.
+
+### 7.1 LLM backends
+
+The miner is model-agnostic — every backend implements the same `.propose()` and is selected by setting
+`LLM_PROVIDER` (and optionally `LLM_KWARGS`) in `run_demo.py`. Pick one:
+
+| `LLM_PROVIDER` | Backend | Install | Auth |
+|----------------|---------|---------|------|
+| `mock` | Offline rotating pool (no network) | — | none |
+| `anthropic` | Claude direct API (defaults to `claude-opus-4-8`) | `pip install 'alphamine[llm]'` | `ANTHROPIC_API_KEY` |
+| `bedrock` | Claude via **Amazon Bedrock** (AWS auth + billing) | `pip install 'alphamine[bedrock]'` | AWS creds + `AWS_REGION` |
+| `openai` | **OpenAI** GPT models | `pip install 'alphamine[openai]'` | `OPENAI_API_KEY` |
+| `groq` / `together` / `openrouter` | Hosted open-source gateways | `pip install 'alphamine[openai]'` | provider key (`GROQ_API_KEY`, …) |
+| `ollama` / `vllm` / `lmstudio` / `llamacpp` | **Local** open-source models | `pip install 'alphamine[openai]'` + run the server | none |
+| `local` / `openai-compat` | Any custom OpenAI-compatible endpoint (pass `base_url`) | `pip install 'alphamine[openai]'` | optional |
+
+```python
+# run_demo.py — examples
+LLM_PROVIDER = "anthropic"; LLM_KWARGS = {}                                  # -> claude-opus-4-8
+LLM_PROVIDER = "bedrock";   LLM_KWARGS = {"model": "anthropic.claude-opus-4-8"}
+LLM_PROVIDER = "openai";    LLM_KWARGS = {"model": "gpt-4o"}
+LLM_PROVIDER = "ollama";    LLM_KWARGS = {"model": "llama3.1"}               # local, free, private
+LLM_PROVIDER = "groq";      LLM_KWARGS = {"model": "llama-3.3-70b-versatile"}
+```
+
+Open-source stacks (Ollama, vLLM, LM Studio, llama.cpp, Together, Groq, OpenRouter) are all reached through
+a single `OpenAICompatClient` — they expose an OpenAI-compatible `/chat/completions` endpoint, so switching
+between them is just a provider name (and `base_url` for anything custom). Note: smaller local models (7–8B)
+emit valid DSL/JSON less reliably than frontier models, so expect a lower yield of admitted alphas per round.
 
 ---
 

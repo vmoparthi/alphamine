@@ -1,5 +1,7 @@
 numpy>=1.24
 pandas>=2.0
 # Optional, only needed for real data / real LLM:
-# yfinance>=0.2.40
-# anthropic>=0.39
+# yfinance>=0.2.40            # real OHLCV data source
+# anthropic>=0.39            # Claude direct API (LLM_PROVIDER="anthropic")
+# anthropic[bedrock]>=0.39   # Claude via Amazon Bedrock (LLM_PROVIDER="bedrock")
+# openai>=1.0                # OpenAI GPT + OpenAI-compatible servers (openai/ollama/vllm/groq/...)

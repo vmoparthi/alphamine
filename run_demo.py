@@ -4,7 +4,19 @@
 
 To go live, change CONFIG below:
     DATA_SOURCE  = "yfinance"   (pip install yfinance, set TICKERS)
-    LLM_PROVIDER = "anthropic"  (pip install anthropic, export ANTHROPIC_API_KEY)
+    LLM_PROVIDER = "anthropic"  (pip install anthropic, export ANTHROPIC_API_KEY) -> claude-opus-4-8
+
+Claude via Amazon Bedrock (pip install 'anthropic[bedrock]', AWS creds + AWS_REGION):
+    LLM_PROVIDER = "bedrock";  LLM_KWARGS = {"model": "anthropic.claude-opus-4-8"}
+
+OpenAI GPT models (pip install openai, export OPENAI_API_KEY):
+    LLM_PROVIDER = "openai";   LLM_KWARGS = {"model": "gpt-4o"}
+
+Open-source / local models (pip install openai, run the server, then):
+    LLM_PROVIDER = "ollama";   LLM_KWARGS = {"model": "llama3.1"}
+    LLM_PROVIDER = "vllm";     LLM_KWARGS = {"model": "Qwen/Qwen2.5-7B-Instruct"}
+    LLM_PROVIDER = "lmstudio"; LLM_KWARGS = {"model": "<loaded-model-id>"}
+    LLM_PROVIDER = "groq";     LLM_KWARGS = {"model": "llama-3.3-70b-versatile"}  (export GROQ_API_KEY)
 """
 from alphamine import data
 from alphamine.library import AlphaLibrary
@@ -18,7 +30,8 @@ from alphamine.alpha101 import load_alpha101
 DATA_SOURCE = "synthetic"     # or "yfinance"
 TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "XOM",
            "JNJ", "PG", "KO", "PEP", "WMT", "DIS", "INTC", "CSCO"]
-LLM_PROVIDER = "mock"         # or "anthropic"
+LLM_PROVIDER = "mock"         # "mock" | "anthropic" | "bedrock" | "openai" | open-source: "ollama"/"vllm"/"lmstudio"/"groq"/...
+LLM_KWARGS = {}               # extra args for the client, e.g. {"model": "llama3.1"} for ollama
 WARM_START = True             # seed the library with classic alphas before mining
 USE_ALPHA101 = True           # seed with the full WorldQuant 101 (else small curated bank)
 COST_BPS = 5.0
@@ -40,7 +53,7 @@ def main():
                       max_corr=0.7, min_rank_ic=0.01, min_sharpe=0.3)
     library = AlphaLibrary(max_corr=cfg.max_corr,
                            min_rank_ic=cfg.min_rank_ic, min_sharpe=cfg.min_sharpe)
-    client = make_client(LLM_PROVIDER)
+    client = make_client(LLM_PROVIDER, **LLM_KWARGS)
 
     # 2b) OPTIONAL warm-start: admit classic seed alphas so the LLM has a base to build on.
     #     (You don't need to supply any alpha yourself — these ship in alphamine/seeds.py.)
