@@ -1,30 +1,75 @@
-# AlphaMine — LLM-driven alpha mining (starter)
+# AlphaMine
 
-A small, runnable system that uses an LLM to **generate**, **evaluate**, and **iteratively improve**
-formulaic alpha factors on US equities. It runs **offline out of the box** (synthetic data + a mock
-"LLM" that emits real alpha expressions), so you can see the full loop before plugging in a real API
-key or real data.
+**LLM-driven discovery of formulaic alpha factors for US equities.**
+
+AlphaMine uses a large language model as the search operator in a closed loop: it proposes alpha
+expressions in a small, safe domain-specific language; each is parsed, evaluated (Information Coefficient
+and a long-short backtest), screened by a risk-review critic, and admitted to a diversity-gated library. A
+reflection memory turns each round's results into guidance for the next, so the system behaves like a
+guided evolutionary search with the model as the mutation operator.
+
+The design prioritizes **transparency and statistical discipline** — every signal is a human-readable
+expression, evaluation is point-in-time, and the anti-leakage guarantees that sink most LLM-alpha projects
+are built into the core (see [§5](#5-anti-overfitting-and-anti-leakage)).
+
+> **Research software.** Backtests are hypothetical and this is not investment advice. Treat every result
+> as a hypothesis until validated out-of-sample and forward-tested.
+
+---
+
+## Highlights
+
+- **Transparent signals.** Alphas are short symbolic expressions (e.g. `rank(-1 * corr(close, volume, 5))`),
+  not opaque weights — cheap to generate, trivial to mutate, and auditable.
+- **Runs offline out of the box.** A deterministic synthetic market and a mock proposer mean the full loop
+  runs with no API key and no internet; swap in real data and a real model with one config line each.
+- **Provider-agnostic.** One `LLMClient` interface behind which any backend plugs in — Anthropic, OpenAI,
+  Amazon Bedrock, or local/self-hosted open-source models (Ollama, vLLM, Groq, …).
+- **Statistical rigor first.** Strict train/test splits, point-in-time operators, a correlation-based
+  diversity gate, transaction costs on by default, and a Deflated-Sharpe hook for multiple-testing.
+- **Agentic search.** A reflection memory and a risk-review critic (ideas from TradingAgents) make each
+  round smarter and catch look-ahead and cost-fragile candidates before admission.
+- **Scales to large universes.** Evaluation is parallelized across CPU cores; the proposer runs on managed
+  or local infrastructure. A headless, environment-driven job runner (`infra/run_job.py`) emits
+  machine-readable artifacts and a run report.
+- **Batteries included.** Ships all 100 usable WorldQuant Alpha101 factors as a ready-to-use seed library.
+
+---
+
+## Quickstart
+
+```bash
+pip install -r requirements.txt        # core: numpy + pandas
+
+python run_demo.py                     # offline end-to-end: synthetic data + mock proposer
+python -m pytest -q                    # test suite
+```
+
+The demo prints each round's admitted and rejected alphas with scores, then re-scores the final library on
+a held-out test window ranked by test Rank-IC. To go live, set `DATA_SOURCE = "yfinance"` and choose an
+`LLM_PROVIDER` in `run_demo.py` (see [§7](#7-usage)).
 
 ---
 
 ## 1. Design rationale
 
-**Formulaic alphas on US equity daily OHLCV are the starting point.** Each signal is a short symbolic
-expression (e.g. `rank(-1 * corr(close, volume, 5))`):
+**Formulaic alphas on daily OHLCV are the foundation.** Each signal is a short symbolic expression, which
+makes the approach uniquely well-suited to an LLM loop:
 
-- Cheap for an LLM to generate, trivial to mutate, and **fully transparent** — no black-box overfitting.
-- Evaluation is fast and objective (Information Coefficient + a long-short backtest), enabling a tight
-  propose → score → critique → propose loop — the approach used by Chain-of-Alpha / QuantaAlpha.
-- It avoids the leakage traps that sink news/agentic approaches (see §5).
+- Expressions are cheap for a model to generate, trivial to mutate, and **fully transparent** — no
+  black-box overfitting.
+- Evaluation is fast and objective (Information Coefficient plus a long-short backtest), enabling a tight
+  propose → score → critique → propose loop, as in Chain-of-Alpha / QuantaAlpha.
+- It sidesteps the leakage traps that sink news- and agent-driven approaches (see [§5](#5-anti-overfitting-and-anti-leakage)).
 
 **The miner is model-agnostic.** Alpha generation is a *reasoning + code* task run a few hundred times per
-run, so generation quality matters more than throughput and token cost is small. A frontier API model gives
-the best yield; local open-source models are a drop-in swap for privacy or cost. Every backend sits behind
-one `LLMClient` interface, so the provider is a single config line (see §7.1).
+run, so generation quality matters more than throughput and token cost is small. A frontier API model
+yields the best results; local open-source models are a drop-in swap for privacy or cost. Every backend
+sits behind one `LLMClient` interface, so the provider is a single configuration line ([§7.1](#71-llm-backends)).
 
-**Options support is Phase 2.** Options alpha mining needs a clean historical options chain (IV surface,
-greeks) and a more careful backtest (path-dependent P&L, delta hedging, bid/ask). The architecture drives
-it with the *same* mining loop — only the data panel and evaluator change (see §6).
+**Options support is Phase 2.** Options mining requires a clean historical options chain (IV surface,
+greeks) and a path-dependent, delta-hedged backtest. The architecture is built so the *same* mining loop
+drives it later — only the data panel and evaluator change (see [§6](#6-extending-to-options-phase-2)).
 
 ---
 
@@ -32,110 +77,90 @@ it with the *same* mining loop — only the data panel and evaluator change (see
 
 ![AlphaMine architecture: pluggable LLM backends (Mock / Anthropic / OpenAI / Bedrock / local OSS) drive a clockwise mining loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt; the library is re-scored on a held-out test split to produce ranked alphas.](assets/architecture.svg)
 
-The loop runs clockwise. The **LLM client** (any backend — see §7.1) proposes new alpha expressions; each
-is **validated** (safe AST parse, no arbitrary `eval`) and **evaluated** on the data panel (Rank-IC + a
-long-short backtest). A **risk-review** critic then vetoes look-ahead-prone or cost-fragile candidates
-before they reach the **alpha library**, which admits a survivor only if it also clears the novelty gate
-(correlation < 0.7 vs every stored alpha). Each round's outcomes are distilled into a **reflection memory**
-whose lessons feed back into the next prompt — so the loop behaves like a guided evolutionary search with
-the LLM as the mutation operator (agentic layer in `agents.py`, ideas from TradingAgents).
+The loop runs clockwise. The **LLM client** (any backend — see [§7.1](#71-llm-backends)) proposes new alpha
+expressions; each is **validated** (safe AST parse, no arbitrary `eval`) and **evaluated** on the data
+panel (Rank-IC plus a long-short backtest). A **risk-review** critic then vetoes look-ahead-prone or
+cost-fragile candidates before they reach the **alpha library**, which admits a survivor only if it also
+clears the novelty gate (signal correlation below threshold against every stored alpha). Each round's
+outcomes are distilled into a **reflection memory** whose lessons feed back into the next prompt.
 
-### 2.1 Components — what each part does
+### 2.1 Components
 
-- **`data.py` — market data.** Loads daily OHLCV into a `Panel`: one aligned DataFrame per field
-  (open/high/low/close/volume, plus derived returns/vwap), indexed by date × ticker, with a chronological
-  `split()` into train/valid/test. Ships a deterministic **synthetic** market (so the whole system runs with
-  no internet) and a real **yfinance** loader that cleans up delisted/short-history symbols.
-- **`dsl.py` — the alpha language.** Defines the operator vocabulary the LLM may use — cross-sectional
-  (`rank`, `scale`, `zscore`), time-series (`delay`, `delta`, `ts_mean`, `ts_std`, `ts_rank`, `corr`,
-  `decay_linear`, …), and arithmetic — each implemented as a vectorized function on pandas panels. Also holds
-  `DSL_SPEC`, the human-readable operator list injected into the prompt.
-- **`alpha.py` — expression → signal.** An `Alpha` wraps an expression string and turns it into a signal
-  panel through a **safe AST evaluator**: only whitelisted fields, numeric constants, and DSL operators are
-  allowed — never `eval` of arbitrary Python. Invalid or non-panel expressions raise `AlphaError`.
-- **`evaluate.py` — scoring.** Turns a signal into performance: IC / Rank-IC / ICIR, and a decile
-  **long-short backtest** with transaction costs → Sharpe, annual return, max drawdown, turnover. Includes a
-  `deflated_sharpe` helper (multiple-testing haircut) and `evaluate_many`, the process-pool parallel scorer.
-- **`library.py` — the alpha store.** `AlphaLibrary` decides what gets kept: an alpha is admitted only if it
-  clears the **quality** bar (Rank-IC / Sharpe) *and* the **novelty** gate (signal correlation below a
-  threshold vs every stored alpha). Tracks total trials (for the multiple-testing haircut) and persists to JSON.
-- **`llm.py` — the proposer.** One `LLMClient` interface with a `.propose(prompt)` method, plus pluggable
-  backends behind it (offline mock, Anthropic, Anthropic-on-Bedrock, and an OpenAI-compatible client covering
-  OpenAI and local/hosted open-source servers). `make_client(provider)` selects one. See §7.1.
-- **`agents.py` — the agentic layer** (ideas from TradingAgents). Two critics that make the search smarter: a
-  **reflection memory** that summarizes each round's lessons (which operators worked, why proposals failed)
-  and feeds them into the next prompt, and a **risk-review** critic that vetoes look-ahead-prone or
-  cost-fragile candidates before admission.
-- **`miner.py` — the loop.** Orchestrates a round: build the prompt → ask the proposer → validate → evaluate →
-  risk-review → admit/reject → reflect → repeat. `evaluate_on_test` does the final held-out re-score.
-- **`seeds.py` — warm start.** `warm_start()` evaluates a set of seed alphas and admits the good, diverse ones
-  before mining, so the LLM builds on a base instead of a blank page.
-- **`alpha101.py` — seed bank.** All of WorldQuant's 101 Formulaic Alphas translated into the DSL, ready to
-  warm-start with (see §8).
-- **`run_demo.py` — entry point.** End-to-end run with one config block (data source, provider, cost, parallelism).
+| Module | Responsibility |
+|--------|----------------|
+| `data.py`     | Loads daily OHLCV into a `Panel` (one aligned DataFrame per field, indexed date × ticker) with a chronological train/valid/test `split()`. Ships a deterministic **synthetic** market and a real **yfinance** loader that cleans up delisted/short-history symbols. |
+| `dsl.py`      | The alpha language — cross-sectional (`rank`, `scale`, `zscore`), time-series (`delay`, `delta`, `ts_mean`, `ts_std`, `ts_rank`, `corr`, `decay_linear`, …), and arithmetic operators, each vectorized over pandas panels. Holds `DSL_SPEC`, the operator reference injected into the prompt. |
+| `alpha.py`    | The `Alpha` object: turns an expression string into a signal panel through a **safe AST evaluator** that permits only whitelisted fields, numeric constants, and DSL operators — never arbitrary Python. |
+| `evaluate.py` | Scoring: IC / Rank-IC / ICIR and a decile **long-short backtest** with costs → Sharpe, annual return, max drawdown, turnover. Includes `deflated_sharpe` (multiple-testing haircut) and `evaluate_many` (parallel scorer). |
+| `library.py`  | `AlphaLibrary` — admits an alpha only if it clears the **quality** bar (Rank-IC / Sharpe) *and* the **novelty** gate (low correlation vs every stored alpha). Tracks trial count; persists to JSON. |
+| `llm.py`      | The proposer: one `LLMClient` interface with pluggable backends (mock, Anthropic, Anthropic-on-Bedrock, and an OpenAI-compatible client covering OpenAI and local/hosted OSS). `make_client(provider)` selects one. |
+| `agents.py`   | The agentic layer (ideas from TradingAgents): a **reflection memory** that feeds per-round lessons forward, and a **risk-review critic** that vetoes look-ahead / cost-fragile alphas before admission. |
+| `miner.py`    | The loop — prompt → propose → validate → evaluate → risk-review → admit/reject → reflect → repeat — plus `evaluate_on_test` for the held-out re-score. |
+| `seeds.py`    | `warm_start()` evaluates seed alphas and admits the good, diverse ones before mining. |
+| `alpha101.py` | All of WorldQuant's 101 Formulaic Alphas translated into the DSL (see [§8](#8-worldquant-alpha101-seed-bank)). |
+| `run_demo.py` / `infra/run_job.py` | Interactive demo and headless, environment-driven job runner. |
 
 ---
 
-## 3. The mining loop (what actually happens each round)
+## 3. The mining loop
 
-1. **Prompt** the LLM with: the DSL spec, the top-N alphas found so far (with their scores), the most
-   recent rejects (with *why* they failed), and an instruction to produce *novel, economically-motivated*
+Each round:
+
+1. **Prompt** the model with the DSL specification, the top-N alphas found so far (with scores), the most
+   recent rejects (with *why* they failed), and an instruction to produce novel, economically-motivated
    expressions in strict JSON.
-2. **Parse** each expression with the safe evaluator. Reject anything that doesn't parse or references
-   unknown operators/fields.
-3. **Evaluate** on the **train** split only: compute Rank-IC and a long-short backtest.
-4. **Novelty gate**: compute the new signal's correlation to every alpha already in the library; reject if
-   it's a near-duplicate (|corr| ≥ 0.7).
-5. **Admit** survivors to the library; record rejects + reasons.
-6. **Feed back** the round's results into the next prompt. Over rounds this behaves like a guided
-   evolutionary search (the LLM is the mutation/crossover operator).
-7. After mining, **re-evaluate the final library on the held-out test split** — this is the only number you
-   should trust.
+2. **Parse** each expression with the safe evaluator; reject anything that fails to parse or references
+   unknown operators or fields.
+3. **Evaluate** on the **train** split only — Rank-IC and a long-short backtest.
+4. **Gate**: reject candidates that fail the quality bar, are flagged by the risk-review critic, or are
+   near-duplicates of an existing alpha (correlation above threshold).
+5. **Admit** survivors to the library and record rejects with reasons.
+6. **Reflect**: feed the round's outcomes into the next prompt — over rounds this is a guided evolutionary
+   search with the model as mutation/crossover operator.
+
+After mining, the final library is **re-evaluated on the held-out test split** — the only number to trust.
 
 ---
 
 ## 4. Metrics
 
-- **IC / Rank-IC**: cross-sectional correlation between today's signal and next-period returns. Rank-IC
-  (Spearman) is the robust workhorse. Mean Rank-IC > ~0.03 with positive IR is interesting on daily equity.
-- **ICIR**: mean IC / std of IC across days — stability matters more than peak IC.
-- **Long-short backtest**: each day go long the top decile / short the bottom decile of the signal,
-  rebalance daily, subtract per-side transaction cost (bps). Report annualized Sharpe, return, max
-  drawdown, average daily turnover.
+- **IC / Rank-IC** — cross-sectional correlation between today's signal and next-period returns. Rank-IC
+  (Spearman) is the robust workhorse; mean Rank-IC > ~0.03 with positive IR is interesting on daily equity.
+- **ICIR** — mean IC over its standard deviation across days; stability matters more than peak IC.
+- **Long-short backtest** — each day, long the top decile and short the bottom decile of the signal,
+  rebalance daily, net of per-side transaction cost. Reports annualized Sharpe, return, max drawdown, and
+  average daily turnover.
 
 ---
 
-## 5. Anti-overfitting & anti-leakage (do not skip)
+## 5. Anti-overfitting and anti-leakage
 
-This is where most LLM-alpha projects quietly fail. Built into the design:
+This is where most LLM-alpha projects quietly fail. The safeguards are built into the design, not bolted on:
 
-- **Strict time splits**: mining sees only `train`. Final numbers come only from `test`. No peeking.
-- **Point-in-time operators**: every time-series operator uses only past data (`delay`, trailing windows).
-  Returns used for scoring are *forward* returns; signals are lagged so a signal at day *t* trades the
-  *t→t+1* move.
-- **Multiple-testing reality check**: you will test thousands of alphas. A 2-sigma Sharpe means little after
-  10k trials. The library tracks the trial count so you can apply a **Deflated Sharpe Ratio** / Bonferroni
-  haircut before believing anything. (Hook provided in `evaluate.py`.)
-- **Diversity gate**: correlation-based dedup stops the LLM from "finding" 50 rescalings of momentum.
-- **Costs on by default**: turnover-heavy alphas must clear realistic transaction costs to score well.
-- **Leakage notes** (see Profit Mirage, arxiv 2510.07920): if you later add news/fundamentals, restrict all
-  observations to dates *after* the LLM's training cutoff, and use only as-reported (point-in-time)
-  fundamentals — never restated values.
+- **Strict time splits** — mining sees only `train`; reported numbers come only from `test`. No peeking.
+- **Point-in-time operators** — every time-series operator uses only past data; returns used for scoring
+  are *forward* returns, and signals are lagged so a signal at day *t* trades the *t→t+1* move.
+- **Multiple-testing discipline** — across thousands of trials a 2-sigma Sharpe means little. The library
+  tracks the trial count so a **Deflated Sharpe Ratio** / Bonferroni haircut can be applied before any
+  result is believed (`deflated_sharpe` in `evaluate.py`).
+- **Diversity gate** — correlation-based dedup prevents the model from "discovering" fifty rescalings of momentum.
+- **Costs on by default** — turnover-heavy alphas must clear realistic transaction costs to score.
+- **Leakage guidance** — when extending to news/fundamentals, restrict observations to dates after the
+  model's training cutoff and use only as-reported (point-in-time) values (cf. *Profit Mirage*, arXiv:2510.07920).
 
 ---
 
 ## 6. Extending to options (Phase 2)
 
-The loop is unchanged; you swap two things:
+The mining loop is unchanged; two components are swapped:
 
-1. **Data panel** → historical options chains: per (underlying, expiry, strike) you need close, IV, delta,
-   gamma, vega, open interest. (Sources: ORATS, CBOE DataShop, or your broker's history.)
-2. **Evaluator** → the long-short-of-stocks backtest is replaced by a **delta-hedged option P&L** engine
-   (so the alpha is a view on *vol*, not direction). Market-Bench (arxiv 2512.12264) shows how sensitive
-   this P&L is to implementation details — build it against a verified reference.
+1. **Data panel** → historical options chains: per (underlying, expiry, strike), close, IV, delta, gamma,
+   vega, open interest. (Sources: ORATS, CBOE DataShop, or broker history.)
+2. **Evaluator** → the long-short-of-stocks backtest is replaced by a **delta-hedged option P&L** engine,
+   so the alpha expresses a view on *volatility*, not direction. (cf. Market-Bench, arXiv:2512.12264.)
 
-The DSL gains a few fields (`iv`, `delta`, `gamma`, `vega`, `oi`) and operators stay the same. Typical
-option alphas: IV rank, term-structure slope, skew, IV-minus-realized vol.
+The DSL gains a few fields (`iv`, `delta`, `gamma`, `vega`, `oi`); operators are unchanged. Typical option
+alphas: IV rank, term-structure slope, skew, IV-minus-realized vol.
 
 ---
 
@@ -144,111 +169,109 @@ option alphas: IV rank, term-structure slope, skew, IV-minus-realized vol.
 ```bash
 pip install -r requirements.txt
 
-# Offline demo — no API key, no internet. Synthetic data + mock LLM.
+# Offline — no API key, no internet (synthetic data + mock proposer)
 python run_demo.py
 
-# Real data (yfinance) — internet, no API key needed (still uses the mock LLM):
-pip install 'alphamine[data]'        # or: pip install yfinance
-#   in run_demo.py: DATA_SOURCE = "yfinance"  (TICKERS already set)
+# Real data (yfinance) — internet only, still using the mock proposer
+pip install 'alphamine[data]'                  # or: pip install yfinance
+#   in run_demo.py: DATA_SOURCE = "yfinance"
 
-# Real data + a real model (any provider from §7.1):
+# Real data + a real model (any provider from §7.1)
 #   DATA_SOURCE  = "yfinance"
 #   LLM_PROVIDER = "anthropic" | "openai" | "bedrock" | "ollama" | ...
-# then set that provider's credential, e.g.:
-export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY, AWS creds, a local server, ...
+export ANTHROPIC_API_KEY=...                   # or OPENAI_API_KEY, AWS creds, a local server, …
 ```
 
-The demo prints each round's admitted/rejected alphas with scores, then the final library re-scored on the
-held-out test window, ranked by test Rank-IC.
+The `yfinance` loader is built for real-world data: bad/delisted symbols and tickers with too little
+history (`< min_obs` bars, default 60) are dropped with a note, the requested ticker order is preserved,
+and an empty download raises a clear error rather than failing deep in the pipeline.
 
-The `yfinance` loader handles real-world data messes: bad/delisted symbols and tickers with too little
-history (`< min_obs` bars, default 60) are dropped with a note, the requested ticker order is preserved, and
-an empty download raises a clear error instead of failing deep in the pipeline.
+For non-interactive runs, `infra/run_job.py` takes all configuration from environment variables and writes
+artifacts (config, alpha library, test results, and a run report) to a local directory or to `s3://…`.
 
 ### 7.1 LLM backends
 
-The miner is model-agnostic — every backend implements the same `.propose()` and is selected by setting
-`LLM_PROVIDER` (and optionally `LLM_KWARGS`) in `run_demo.py`. Pick one:
+Every backend implements the same `.propose()` and is selected with `LLM_PROVIDER` (and an optional
+`LLM_KWARGS` for the model id):
 
 | `LLM_PROVIDER` | Backend | Install | Auth |
 |----------------|---------|---------|------|
 | `mock` | Offline rotating pool (no network) | — | none |
 | `anthropic` | Anthropic API | `pip install 'alphamine[llm]'` | `ANTHROPIC_API_KEY` |
-| `bedrock` | Anthropic models via **Amazon Bedrock** (AWS auth + billing) | `pip install 'alphamine[bedrock]'` | AWS creds + `AWS_REGION` |
+| `bedrock` | Anthropic models via **Amazon Bedrock** | `pip install 'alphamine[bedrock]'` | AWS creds + `AWS_REGION` |
 | `openai` | OpenAI API | `pip install 'alphamine[openai]'` | `OPENAI_API_KEY` |
-| `groq` / `together` / `openrouter` | Hosted open-source gateways | `pip install 'alphamine[openai]'` | provider key (`GROQ_API_KEY`, …) |
-| `ollama` / `vllm` / `lmstudio` / `llamacpp` | **Local** open-source models | `pip install 'alphamine[openai]'` + run the server | none |
-| `local` / `openai-compat` | Any custom OpenAI-compatible endpoint (pass `base_url`) | `pip install 'alphamine[openai]'` | optional |
+| `groq` / `together` / `openrouter` | Hosted open-source gateways | `pip install 'alphamine[openai]'` | provider key |
+| `ollama` / `vllm` / `lmstudio` / `llamacpp` | Local open-source models | `pip install 'alphamine[openai]'` + run the server | none |
+| `local` / `openai-compat` | Any custom OpenAI-compatible endpoint (`base_url`) | `pip install 'alphamine[openai]'` | optional |
 
 ```python
-# run_demo.py — examples (model id goes in LLM_KWARGS; each provider has a sensible default)
+# run_demo.py — model id goes in LLM_KWARGS; each provider has a sensible default
 LLM_PROVIDER = "anthropic"; LLM_KWARGS = {"model": "claude-opus-4-8"}
 LLM_PROVIDER = "openai";    LLM_KWARGS = {"model": "gpt-4o"}
 LLM_PROVIDER = "bedrock";   LLM_KWARGS = {"model": "anthropic.claude-opus-4-8"}
-LLM_PROVIDER = "ollama";    LLM_KWARGS = {"model": "llama3.1"}               # local, free, private
-LLM_PROVIDER = "groq";      LLM_KWARGS = {"model": "llama-3.3-70b-versatile"}
+LLM_PROVIDER = "ollama";    LLM_KWARGS = {"model": "llama3.1"}   # local, free, private
 ```
 
 Open-source stacks (Ollama, vLLM, LM Studio, llama.cpp, Together, Groq, OpenRouter) are all reached through
 a single `OpenAICompatClient` — they expose an OpenAI-compatible `/chat/completions` endpoint, so switching
-between them is just a provider name (and `base_url` for anything custom). Smaller local models (7–8B) emit
-valid DSL/JSON less reliably than frontier models; to cushion this, every API-backed client does a **one-shot
-JSON repair** — if a reply can't be parsed into alpha objects, it re-asks once with a stricter instruction
-before giving up. Expect a somewhat lower yield of admitted alphas per round on small models regardless.
+between them is just a provider name (and `base_url` for anything custom). Smaller local models emit valid
+DSL/JSON less reliably than frontier models; to cushion this, every API-backed client performs a **one-shot
+JSON repair** — on an unparseable reply it re-asks once with a stricter instruction before giving up.
 
 ### 7.2 Running at scale
 
-The system has two independent compute axes that scale very differently:
+The system has two compute axes that scale very differently:
 
 - **LLM inference (the proposer)** is *not* the bottleneck for serious mining — even hundreds of rounds is a
-  few hundred calls. Use a frontier model for quality: an API (`anthropic`/`openai`) or **AWS Bedrock**
-  (`LLM_PROVIDER="bedrock"` — managed models on your AWS account, no GPU to run). Stand up a GPU box
-  (local, or AWS `g5`/`g6` + vLLM) only if you want fully-private OSS inference at speed.
+  few hundred calls. Use a frontier model for quality via an API (`anthropic` / `openai`) or **Amazon
+  Bedrock** (`LLM_PROVIDER="bedrock"` — managed models, no GPU). Stand up a GPU host (local, or AWS
+  `g5`/`g6` with vLLM) only when fully-private open-source inference at speed is required.
 - **Evaluation (the backtest)** *is* the bottleneck at scale — scoring thousands of candidate alphas over a
-  large universe. It's embarrassingly parallel, so it runs across all CPU cores: set `N_JOBS` in
-  `run_demo.py` (or pass `n_jobs=` to `warm_start` / `evaluate_on_test`). The panel is shipped to each
-  worker once; small universes auto-stay sequential (no overhead), large ones fan out. Put your "power
-  machine" budget into a high-core box (e.g. AWS `c7i.8xlarge`) for the evaluation sweep.
+  large universe. It is embarrassingly parallel and runs across all CPU cores: set `N_JOBS` (or pass
+  `n_jobs=` to `warm_start` / `evaluate_on_test`). The panel is shipped to each worker once; small
+  universes stay sequential automatically while large ones fan out. Direct compute budget at a high-core
+  host (e.g. AWS `c7i.8xlarge`) for the evaluation sweep.
 
-For Russell-3000-scale runs you'll also want a bulk OHLCV source + a parquet cache rather than yfinance,
-which rate-limits at thousands of tickers (roadmap item).
+For Russell-3000-scale runs, replace yfinance with a bulk OHLCV source and a parquet cache (see
+[BACKLOG.md](BACKLOG.md)).
 
 ---
 
 ## 8. WorldQuant Alpha101 seed bank
 
-`alphamine/alpha101.py` ships all 101 formulaic alphas from Kakushadze (2015), translated
-into this DSL so you have a large, ready-made seed library — you supply nothing.
+`alphamine/alpha101.py` provides all 101 formulaic alphas from Kakushadze (2015), translated into the DSL
+as a ready-made seed library.
 
-- **100 of 101 are usable.** #56 needs market cap (`cap`), which isn't in OHLCV data, so it's
+- **100 of 101 are usable.** #56 requires market cap (`cap`), which is absent from OHLCV data, and is
   omitted (listed in `SKIPPED`).
-- **18 use `IndNeutralize`.** We don't ship sector labels, so `indneutralize()` approximates it
-  as a daily cross-sectional demean. Those alphas are flagged `approx=True`; swap in real sector
-  grouping for production. Use `load_alpha101(panel, include_approx=False)` to drop them.
-- **Non-integer windows** from the paper (e.g. `8.93345`) are rounded to ints (rolling windows
-  must be integers) — standard practice, negligible effect.
-
-Use them three ways:
+- **18 use `IndNeutralize`.** Without shipped sector labels, `indneutralize()` approximates it as a daily
+  cross-sectional demean; those alphas are flagged `approx=True`. Pass `include_approx=False` to drop them,
+  or supply real sector grouping for production.
+- **Non-integer windows** from the paper (e.g. `8.93345`) are rounded to integers (rolling windows must be
+  integers) — standard practice, negligible effect.
 
 ```python
 from alphamine.alpha101 import load_alpha101, coverage_report
 alphas = load_alpha101(train_panel)        # -> list[Alpha], ready to evaluate
 warm_start(library, train, alphas=alphas)  # admit the good, diverse ones as seeds
-coverage_report(train_panel)               # diagnostic: which parse/eval, which fail
+coverage_report(train_panel)               # diagnostic: which parse/evaluate, which fail
 ```
 
-In the demo (`USE_ALPHA101=True`, the default), the 101 are evaluated, ~49 clear the
-quality/novelty gates, and the LLM then mines novel alphas on top of that base.
+With `USE_ALPHA101=True` (the default), the 101 are evaluated, roughly half clear the quality/novelty gates,
+and the model then mines novel alphas on top of that base. The same bank degrades gracefully on the options
+panel: `load_alpha101` silently skips any alpha whose fields are unavailable.
 
-The same bank degrades gracefully on the options panel later: `load_alpha101` silently skips any
-alpha whose fields don't exist there.
+---
 
 ## 9. Roadmap
 
-Done so far: the offline scaffold, the Alpha101 seed bank, multi-provider LLM access, the real-data
-(yfinance) loader, the agentic layer (reflection + risk-review), and parallel evaluation. Open items —
-including the Deflated-Sharpe gate, sector/beta neutralization, a meta-signal blend, a big-universe data
-loader, the AWS deployment (`infra/`), and Phase 2 options — are tracked in **[BACKLOG.md](BACKLOG.md)**.
+Delivered: the offline engine, the Alpha101 seed bank, multi-provider LLM access, the real-data (yfinance)
+loader, the agentic layer (reflection + risk-review), parallel evaluation, and a headless job runner. Open
+items — the Deflated-Sharpe admission gate, sector/beta neutralization, a meta-signal blend, a big-universe
+data loader, the local and AWS deployment tracks (`infra/`), a run dashboard, and Phase 2 options — are
+tracked in **[BACKLOG.md](BACKLOG.md)**.
 
-> Not investment advice. Backtested edges routinely vanish live — treat every result as a hypothesis until
-> validated out-of-sample and forward-tested.
+---
+
+<sub>Not investment advice. Backtested edges routinely vanish out-of-sample; treat every result as a
+hypothesis until validated and forward-tested.</sub>
