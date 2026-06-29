@@ -17,6 +17,8 @@ data_cache/
 
 # Outputs the miner writes
 alpha_library.json
+out/
+infra/local/out/
 
 # Notebooks / editors
 .ipynb_checkpoints/

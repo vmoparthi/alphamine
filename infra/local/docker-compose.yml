@@ -1,0 +1,55 @@
+# Local deployment track. Runs the same image as the AWS track; artifacts land in
+# ./out (this directory). See README.md, or just use the Makefile targets.
+#
+#   docker compose run --rm alphamine          # one mining run -> ./out
+#   docker compose --profile view up viewer    # browse ./out/report.html at :8080
+#   docker compose --profile ollama up -d ollama   # a local OSS model server
+
+services:
+  alphamine:
+    build:
+      context: ../..
+      dockerfile: infra/Dockerfile
+    image: alphamine:latest
+    environment:
+      # — proposer —
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}      # mock | anthropic | openai | bedrock | ollama | ...
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}          # set for OSS-in-container, e.g. http://ollama:11434/v1
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # — data & run —
+      DATA_SOURCE: ${DATA_SOURCE:-synthetic}   # synthetic | yfinance
+      TICKERS: ${TICKERS:-}
+      START: ${START:-}
+      END: ${END:-}
+      ROUNDS: ${ROUNDS:-4}
+      PER_ROUND: ${PER_ROUND:-6}
+      N_JOBS: ${N_JOBS:-}                      # blank = all cores
+      USE_ALPHA101: ${USE_ALPHA101:-1}
+      OUTPUT: /app/out
+    volumes:
+      - ./out:/app/out                         # artifacts (report.html, *.json) appear here
+
+  # Optional: a local open-source model server. Reach it with
+  #   LLM_PROVIDER=ollama LLM_BASE_URL=http://ollama:11434/v1
+  # Pull a model first:  docker compose --profile ollama exec ollama ollama pull qwen2.5:7b
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports: ["11434:11434"]
+    volumes:
+      - ollama:/root/.ollama
+
+  # Optional: serve ./out so you can open report.html in a browser at http://localhost:8080
+  viewer:
+    image: python:3.12-slim
+    profiles: ["view"]
+    working_dir: /srv
+    command: ["python", "-m", "http.server", "8080"]
+    ports: ["8080:8080"]
+    volumes:
+      - ./out:/srv:ro
+
+volumes:
+  ollama:

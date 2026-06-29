@@ -7,6 +7,7 @@ uploaded to S3. Runs offline with the defaults (synthetic data + mock proposer).
 Config (all optional; defaults in []):
   LLM_PROVIDER   mock | anthropic | bedrock | openai | ollama | ...   [mock]
   LLM_MODEL      model id for the provider (e.g. claude-opus-4-8, gpt-4o)   [provider default]
+  LLM_BASE_URL   override the OSS endpoint (e.g. http://ollama:11434/v1)    [provider preset]
   DATA_SOURCE    synthetic | yfinance                                  [synthetic]
   TICKERS        comma-separated symbols (yfinance)                    [16 large caps]
   START / END    yfinance date range (YYYY-MM-DD)                      [2018-01-01 / today]
@@ -29,10 +30,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from alphamine import data
+from alphamine.agents import ReflectiveMemory
 from alphamine.alpha101 import load_alpha101
 from alphamine.library import AlphaLibrary
 from alphamine.llm import make_client
 from alphamine.miner import MinerConfig, evaluate_on_test, mine
+from alphamine.report import render_html
 from alphamine.seeds import warm_start
 
 _DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "XOM",
@@ -112,12 +115,18 @@ def main():
                        alphas=load_alpha101(train), n_jobs=n_jobs)
         print(f"warm-start: admitted {n} Alpha101 seeds")
 
-    client = make_client(provider, **({"model": model} if model else {}))
+    client_kwargs = {}
+    if model:
+        client_kwargs["model"] = model
+    if _env("LLM_BASE_URL"):  # e.g. http://ollama:11434/v1 for an OSS server in another container
+        client_kwargs["base_url"] = _env("LLM_BASE_URL")
+    client = make_client(provider, **client_kwargs)
     cfg = MinerConfig(rounds=int(_env("ROUNDS", 4)), per_round=int(_env("PER_ROUND", 6)),
                       cost_bps=cost)
     print(f"mining: provider={provider} model={model or '(default)'} "
           f"rounds={cfg.rounds} per_round={cfg.per_round}")
-    mine(lib, client, train, cfg)
+    memory = ReflectiveMemory()
+    mine(lib, client, train, cfg, memory=memory)
 
     results = evaluate_on_test(lib, test, cost_bps=cost, n_jobs=n_jobs)
     print(f"done: {len(lib)} alphas, {lib.trials} trials")
@@ -125,6 +134,20 @@ def main():
     cfg_info = {"run_id": run_id, "provider": provider, "model": model or "(default)",
                 "data_source": _env("DATA_SOURCE", "synthetic"),
                 "rounds": cfg.rounds, "per_round": cfg.per_round, "cost_bps": cost}
+
+    # merge train metrics (library) with test metrics (re-score) by expression
+    test_by_expr = {a.expr: m for a, m in results}
+    rows = []
+    for e in lib.entries:
+        tm = test_by_expr.get(e.alpha.expr)
+        rows.append({
+            "expr": e.alpha.expr, "rationale": e.alpha.rationale,
+            "train_rank_ic": e.metrics.rank_ic, "train_sharpe": e.metrics.sharpe,
+            "train_turnover": e.metrics.turnover,
+            "test_rank_ic": tm.rank_ic if tm else None,
+            "test_sharpe": tm.sharpe if tm else None,
+        })
+
     lib_json = json.dumps([
         {"expr": e.alpha.expr, "rationale": e.alpha.rationale,
          "rank_ic": e.metrics.rank_ic, "sharpe": e.metrics.sharpe}
@@ -132,14 +155,16 @@ def main():
     test_json = json.dumps([
         {"expr": a.expr, "test_rank_ic": m.rank_ic, "test_sharpe": m.sharpe}
         for a, m in results], indent=2)
+    reflection = memory.summary(k=cfg.rounds)
 
     _write(output, {
         "config.json": json.dumps(cfg_info, indent=2),
         "alpha_library.json": lib_json,
         "test_results.json": test_json,
         "report.md": _report(run_id, cfg_info, lib, results),
+        "report.html": render_html(cfg_info, rows, reflection),
     })
-    print(f"artifacts -> {output}")
+    print(f"artifacts -> {output}  (open report.html)")
 
 
 if __name__ == "__main__":

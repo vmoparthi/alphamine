@@ -1,0 +1,16 @@
+.git
+.gitignore
+**/__pycache__
+*.pyc
+.venv
+venv
+env
+out
+infra/local/out
+alpha_library.json
+*.parquet
+.claude
+.idea
+.vscode
+.DS_Store
+CLAUDE.md
