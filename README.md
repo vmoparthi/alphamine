@@ -7,55 +7,36 @@ key or real data.
 
 ---
 
-## 1. Recommendation (why this design)
+## 1. Design rationale
 
-You picked *US equities (daily OHLCV)* **and** *options*, "recommend the alpha type", and "recommend the
-LLM backend". Here's the call and the reasoning:
+**Formulaic alphas on US equity daily OHLCV are the starting point.** Each signal is a short symbolic
+expression (e.g. `rank(-1 * corr(close, volume, 5))`):
 
-**Start with formulaic alphas on US equity daily OHLCV.** This is the single highest-leverage starting
-point because:
+- Cheap for an LLM to generate, trivial to mutate, and **fully transparent** — no black-box overfitting.
+- Evaluation is fast and objective (Information Coefficient + a long-short backtest), enabling a tight
+  propose → score → critique → propose loop — the approach used by Chain-of-Alpha / QuantaAlpha.
+- It avoids the leakage traps that sink news/agentic approaches (see §5).
 
-- The signal is a short symbolic expression (e.g. `rank(-1 * corr(close, volume, 5))`). It's cheap for an
-  LLM to generate, trivial to mutate, and **fully transparent** — no black-box overfitting.
-- Evaluation is fast and objective (Information Coefficient + a long-short backtest), so the LLM can run a
-  tight propose → score → critique → propose loop. This is exactly what Chain-of-Alpha / QuantaAlpha do.
-- It avoids the leakage traps that sink news/agentic approaches (covered in §5).
+**The miner is model-agnostic.** Alpha generation is a *reasoning + code* task run a few hundred times per
+run, so generation quality matters more than throughput and token cost is small. A frontier API model
+(Claude or GPT) gives the best yield; local models (Ollama/vLLM) are a drop-in swap for privacy or cost via
+the single `LLMClient` interface (see §7.1).
 
-**Use an API model (Claude or GPT) for the miner.** Alpha generation is a *reasoning + code* task done a
-few hundred times per run — quality matters far more than volume, and the token cost is small. A local
-model (Ollama/vLLM) is a fine swap later for privacy/cost; the `LLMClient` interface makes it a drop-in.
-
-**Options is Phase 2, not Phase 1.** Options alpha mining needs a clean historical options chain (IV
-surface, greeks) and a much more careful backtest (path-dependent P&L, delta hedging, bid/ask). The
-architecture below is built so the *same* mining loop drives it later — you only swap the data panel and
-the evaluator. See §6.
+**Options support is Phase 2.** Options alpha mining needs a clean historical options chain (IV surface,
+greeks) and a more careful backtest (path-dependent P&L, delta hedging, bid/ask). The architecture drives
+it with the *same* mining loop — only the data panel and evaluator change (see §6).
 
 ---
 
 ## 2. System architecture
 
-```
-                ┌─────────────────────────────────────────────────────┐
-                │                     MINER LOOP                        │
-                │                                                       │
-   ┌─────────┐  │  ┌───────────┐   ┌────────────┐   ┌───────────────┐  │
-   │  LLM    │──┼─▶│  Generate │──▶│  Parse +   │──▶│  Evaluate     │  │
-   │ client  │  │  │  alphas   │   │  validate  │   │  (IC, backtest)│ │
-   └─────────┘  │  └───────────┘   └────────────┘   └───────┬───────┘  │
-        ▲       │        ▲                                   │          │
-        │       │        │   feedback: scores + critique     │          │
-        │       │        └───────────────────────────────────┘          │
-        │       │                                            │          │
-        │       │                                            ▼          │
-        │       │                                   ┌──────────────┐    │
-        └───────┼───────────────────────────────────│ Alpha library│    │
-   prompt incl. │   novelty check (corr < 0.7 vs     │ (dedup by    │    │
-   best + recent│   existing) before admission       │ correlation) │    │
-                └───────────────────────────────────└──────────────┘────┘
-                                  │
-                                  ▼
-                       data panel (OHLCV)  ◀── yfinance / Stooq / synthetic
-```
+![AlphaMine architecture: the LLM client proposes alpha expressions, which are validated, evaluated against a data panel, and admitted to a correlation-deduplicated alpha library; scores feed back to the LLM.](assets/architecture.svg)
+
+The **LLM client** (any backend — see §7.1) proposes new alpha expressions. Each is **validated**
+(safe AST parse, no arbitrary `eval`), then **evaluated** on the data panel (Rank-IC + a long-short
+backtest). Survivors are **admitted** to the alpha library only if they clear the novelty gate
+(correlation < 0.7 vs every stored alpha). Scores and critiques **feed back** into the next prompt, so
+the loop behaves like a guided evolutionary search with the LLM as the mutation operator.
 
 **Modules**
 
@@ -69,7 +50,7 @@ the evaluator. See §6.
 | `alphamine/library.py` | Persistent alpha store (JSON). Admits a new alpha only if its signal correlation to every stored alpha is below a threshold → enforces **diversity**. |
 | `alphamine/miner.py`   | The loop: prompt → generate → parse → evaluate → admit/reject → build feedback → repeat. |
 | `alphamine/seeds.py`   | Small curated seed bank + `warm_start()` so you never start from a blank page. |
-| `alphamine/alpha101.py`| **All of WorldQuant's 101 Formulaic Alphas**, translated into the DSL (see §9). |
+| `alphamine/alpha101.py`| **All of WorldQuant's 101 Formulaic Alphas**, translated into the DSL (see §8). |
 | `run_demo.py`          | End-to-end offline demo. |
 
 ---
@@ -185,7 +166,7 @@ emit valid DSL/JSON less reliably than frontier models, so expect a lower yield 
 
 ---
 
-## 9. WorldQuant Alpha101 seed bank
+## 8. WorldQuant Alpha101 seed bank
 
 `alphamine/alpha101.py` ships all 101 formulaic alphas from Kakushadze (2015), translated
 into this DSL so you have a large, ready-made seed library — you supply nothing.
@@ -213,7 +194,7 @@ quality/novelty gates, and the LLM then mines novel alphas on top of that base.
 The same bank degrades gracefully on the options panel later: `load_alpha101` silently skips any
 alpha whose fields don't exist there.
 
-## 8. Roadmap
+## 9. Roadmap
 
 - [ ] Phase 1: this scaffold → swap in real OHLCV (yfinance) and a real API model.
 - [ ] Add neutralization (sector/beta) to operators.

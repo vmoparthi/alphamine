@@ -1,0 +1,66 @@
+<svg width="100%" viewBox="0 0 680 350" xmlns="http://www.w3.org/2000/svg" role="img" font-family="ui-sans-serif,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <title>AlphaMine system architecture</title>
+  <desc>The miner loop: an LLM client proposes alpha expressions, which are validated, evaluated against a data panel, and admitted to a correlation-deduplicated alpha library; scores feed back to the LLM.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <style>
+    .th{font-size:14px;font-weight:500}.ts{font-size:12px}
+    .cont{fill:none;stroke:#B4B2A9;stroke-width:1;stroke-dasharray:5 4}
+    .arr{stroke:#888780;stroke-width:1.5;fill:none}
+    .clab,.alab{fill:#5F5E5A}
+    .b-purple{fill:#EEEDFE;stroke:#534AB7}.tt-purple{fill:#3C3489}.st-purple{fill:#534AB7}
+    .b-gray{fill:#F1EFE8;stroke:#5F5E5A}.tt-gray{fill:#444441}.st-gray{fill:#5F5E5A}
+    .b-teal{fill:#E1F5EE;stroke:#0F6E56}.tt-teal{fill:#085041}.st-teal{fill:#0F6E56}
+    .b-blue{fill:#E6F1FB;stroke:#185FA5}.tt-blue{fill:#0C447C}.st-blue{fill:#185FA5}
+    rect{stroke-width:1}
+    @media (prefers-color-scheme:dark){
+      .cont{stroke:#5F5E5A}.clab,.alab{fill:#B4B2A9}
+      .b-purple{fill:#3C3489;stroke:#AFA9EC}.tt-purple{fill:#EEEDFE}.st-purple{fill:#CECBF6}
+      .b-gray{fill:#444441;stroke:#B4B2A9}.tt-gray{fill:#F1EFE8}.st-gray{fill:#D3D1C7}
+      .b-teal{fill:#085041;stroke:#5DCAA5}.tt-teal{fill:#E1F5EE}.st-teal{fill:#9FE1CB}
+      .b-blue{fill:#0C447C;stroke:#85B7EB}.tt-blue{fill:#E6F1FB}.st-blue{fill:#B5D4F4}
+    }
+  </style>
+
+  <rect class="cont" x="30" y="46" width="620" height="200" rx="8"/>
+  <text class="ts clab" x="44" y="66">Miner loop</text>
+
+  <rect class="b-purple" x="46" y="88" width="150" height="58" rx="4"/>
+  <text class="th tt-purple" x="121" y="113" text-anchor="middle">LLM client</text>
+  <text class="ts st-purple" x="121" y="131" text-anchor="middle">Claude · GPT · OSS</text>
+
+  <rect class="b-gray" x="216" y="88" width="110" height="58" rx="4"/>
+  <text class="th tt-gray" x="271" y="113" text-anchor="middle">Generate</text>
+  <text class="ts st-gray" x="271" y="131" text-anchor="middle">propose new</text>
+
+  <rect class="b-gray" x="346" y="88" width="120" height="58" rx="4"/>
+  <text class="th tt-gray" x="406" y="113" text-anchor="middle">Validate</text>
+  <text class="ts st-gray" x="406" y="131" text-anchor="middle">safe AST eval</text>
+
+  <rect class="b-gray" x="486" y="88" width="124" height="58" rx="4"/>
+  <text class="th tt-gray" x="548" y="113" text-anchor="middle">Evaluate</text>
+  <text class="ts st-gray" x="548" y="131" text-anchor="middle">IC + backtest</text>
+
+  <rect class="b-teal" x="300" y="180" width="160" height="58" rx="4"/>
+  <text class="th tt-teal" x="380" y="205" text-anchor="middle">Alpha library</text>
+  <text class="ts st-teal" x="380" y="223" text-anchor="middle">correlation dedup</text>
+
+  <rect class="b-blue" x="470" y="270" width="150" height="58" rx="4"/>
+  <text class="th tt-blue" x="545" y="295" text-anchor="middle">Data panel</text>
+  <text class="ts st-blue" x="545" y="313" text-anchor="middle">real or synthetic</text>
+
+  <line class="arr" x1="196" y1="117" x2="216" y2="117" marker-end="url(#arrow)"/>
+  <line class="arr" x1="326" y1="117" x2="346" y2="117" marker-end="url(#arrow)"/>
+  <line class="arr" x1="466" y1="117" x2="486" y2="117" marker-end="url(#arrow)"/>
+
+  <path class="arr" d="M510,146 L455,180" marker-end="url(#arrow)"/>
+  <text class="ts alab" x="512" y="170" text-anchor="middle">admit</text>
+
+  <path class="arr" d="M560,270 L560,146" marker-end="url(#arrow)"/>
+
+  <path class="arr" d="M300,209 H120 V146" marker-end="url(#arrow)"/>
+  <text class="ts alab" x="206" y="224" text-anchor="middle">feedback</text>
+</svg>
