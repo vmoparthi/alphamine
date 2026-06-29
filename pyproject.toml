@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphamine"
+version = "0.1.0"
+description = "LLM-driven formulaic alpha mining for US equities (with WorldQuant Alpha101 seeds)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Venkata" }]
+keywords = ["quant", "alpha", "factor-mining", "llm", "backtest", "trading"]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+data = ["yfinance>=0.2.40"]
+llm = ["anthropic>=0.39"]
+all = ["yfinance>=0.2.40", "anthropic>=0.39"]
+
+[tool.setuptools]
+packages = ["alphamine"]

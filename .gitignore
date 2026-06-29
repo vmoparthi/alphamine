@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Caches / data
+.cache/
+data_cache/
+*.csv
+*.parquet
+
+# Outputs the miner writes
+alpha_library.json
+
+# Notebooks / editors
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.DS_Store
+
+# Env / secrets
+.env
+*.key
