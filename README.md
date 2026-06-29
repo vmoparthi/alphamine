@@ -30,13 +30,15 @@ it with the *same* mining loop — only the data panel and evaluator change (see
 
 ## 2. System architecture
 
-![AlphaMine architecture: the LLM client proposes alpha expressions, which are validated, evaluated against a data panel, and admitted to a correlation-deduplicated alpha library; scores feed back to the LLM.](assets/architecture.svg)
+![AlphaMine architecture: a clockwise miner loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt.](assets/architecture.svg)
 
-The **LLM client** (any backend — see §7.1) proposes new alpha expressions. Each is **validated**
-(safe AST parse, no arbitrary `eval`), then **evaluated** on the data panel (Rank-IC + a long-short
-backtest). Survivors are **admitted** to the alpha library only if they clear the novelty gate
-(correlation < 0.7 vs every stored alpha). Scores and critiques **feed back** into the next prompt, so
-the loop behaves like a guided evolutionary search with the LLM as the mutation operator.
+The loop runs clockwise. The **LLM client** (any backend — see §7.1) proposes new alpha expressions; each
+is **validated** (safe AST parse, no arbitrary `eval`) and **evaluated** on the data panel (Rank-IC + a
+long-short backtest). A **risk-review** critic then vetoes look-ahead-prone or cost-fragile candidates
+before they reach the **alpha library**, which admits a survivor only if it also clears the novelty gate
+(correlation < 0.7 vs every stored alpha). Each round's outcomes are distilled into a **reflection memory**
+whose lessons feed back into the next prompt — so the loop behaves like a guided evolutionary search with
+the LLM as the mutation operator (agentic layer in `agents.py`, ideas from TradingAgents).
 
 **Modules**
 
