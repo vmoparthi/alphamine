@@ -127,7 +127,11 @@ pip install -r requirements.txt
 # Offline demo — no API key, no internet. Synthetic data + mock LLM.
 python run_demo.py
 
-# Real run: set a key and flip the flags in run_demo.py
+# Real data (yfinance) — internet, no API key needed (still uses the mock LLM):
+pip install 'alphamine[data]'        # or: pip install yfinance
+#   in run_demo.py: DATA_SOURCE = "yfinance"  (TICKERS already set)
+
+# Real data + real model:
 export ANTHROPIC_API_KEY=sk-...
 #   DATA_SOURCE  = "yfinance"
 #   LLM_PROVIDER = "anthropic"
@@ -135,6 +139,10 @@ export ANTHROPIC_API_KEY=sk-...
 
 The demo prints each round's admitted/rejected alphas with scores, then the final library re-scored on the
 held-out test window, ranked by test Rank-IC.
+
+The `yfinance` loader handles real-world data messes: bad/delisted symbols and tickers with too little
+history (`< min_obs` bars, default 60) are dropped with a note, the requested ticker order is preserved, and
+an empty download raises a clear error instead of failing deep in the pipeline.
 
 ### 7.1 LLM backends
 

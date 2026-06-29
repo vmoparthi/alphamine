@@ -87,22 +87,59 @@ def load_synthetic(n_days=750, n_tickers=40, seed=7) -> Panel:
     return _finalize(raw, tickers)
 
 
-def load_yfinance(tickers: List[str], start="2018-01-01", end=None) -> Panel:
-    """Real daily OHLCV via yfinance. Requires the optional dependency + internet."""
-    import yfinance as yf  # noqa: local import so the package imports without it
+def load_yfinance(tickers: List[str], start="2018-01-01", end=None,
+                  min_obs: int = 60) -> Panel:
+    """Real daily OHLCV via yfinance. Requires the optional dependency + internet.
 
-    data = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
-    # yfinance returns a column-multiindex (field, ticker)
-    raw = {
-        "open": data["Open"],
-        "high": data["High"],
-        "low": data["Low"],
-        "close": data["Close"],
-        "volume": data["Volume"],
-    }
-    raw = {k: v.dropna(how="all").ffill() for k, v in raw.items()}
-    cols = list(raw["close"].columns)
-    return _finalize(raw, cols)
+    Cleans up the common real-world messes: bad/delisted symbols (all-NaN columns)
+    are dropped, tickers with fewer than `min_obs` real bars are dropped, columns are
+    returned in the requested order, and an empty download raises a clear error
+    (usually a typo'd symbol or a rate-limit, not a code bug).
+    """
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    try:
+        import yfinance as yf  # local import so the package imports without it
+    except ImportError as e:
+        raise ImportError(
+            "yfinance is required for DATA_SOURCE='yfinance'. "
+            "Install it with: pip install 'alphamine[data]'  (or: pip install yfinance)"
+        ) from e
+
+    data = yf.download(tickers, start=start, end=end, auto_adjust=True,
+                       progress=False, group_by="column")
+    if data is None or len(data) == 0:
+        raise RuntimeError(
+            f"yfinance returned no data for {tickers} ({start}..{end}). "
+            "Check the symbols, the date range, and your connection."
+        )
+
+    _FIELDS = {"open": "Open", "high": "High", "low": "Low",
+               "close": "Close", "volume": "Volume"}
+
+    def _field(name: str) -> pd.DataFrame:
+        col = data[name]
+        # single ticker comes back as a 1-D Series; normalize to a 1-col frame
+        if isinstance(col, pd.Series):
+            col = col.to_frame(name=tickers[0])
+        return col
+
+    raw = {k: _field(v) for k, v in _FIELDS.items()}
+
+    # drop symbols that never returned usable closes, or have too little history
+    close = raw["close"]
+    keep = [t for t in close.columns
+            if close[t].notna().sum() >= min_obs]
+    dropped = [t for t in tickers if t not in keep]
+    if dropped:
+        print(f"[yfinance] dropped {len(dropped)} ticker(s) with insufficient data: {dropped}")
+    if not keep:
+        raise RuntimeError(
+            f"No ticker had >= {min_obs} bars in {start}..{end}; nothing to mine."
+        )
+    # preserve the caller's requested order, then forward-fill gaps
+    raw = {k: v[keep].dropna(how="all").ffill() for k, v in raw.items()}
+    return _finalize(raw, keep)
 
 
 def load(source="synthetic", **kwargs) -> Panel:
