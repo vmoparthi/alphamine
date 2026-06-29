@@ -65,10 +65,29 @@ Goal: one-command deploy of a mining run on AWS. Target an `infra/` folder with 
       as env vars; never baked into the image.
 - [ ] **Cost guardrails** — spot instances for eval, a max-rounds / max-spend cap, auto-teardown after the run.
 
+## Open — UI & monitoring
+
+A run already emits JSON artifacts (`config.json`, `alpha_library.json`, `test_results.json`) + a Markdown
+report, so the UI is mostly a *reader* over those — no re-architecture needed. Build lowest-cost first.
+
+- [ ] **Static run dashboard** *(recommended first)* — a self-contained `report.html` generated alongside
+      `report.md` (no server, no build, no new deps). Sortable/filterable alpha table (train **and** test
+      Rank-IC, Sharpe, turnover), run config, and the reflection log. Opens locally or served from S3.
+- [ ] **Per-alpha drill-down** — equity curve + rolling IC for a selected alpha. **Prerequisite:** persist
+      per-alpha pnl/IC *series* in the artifacts — `evaluate` currently returns only summary metrics, so the
+      series must be captured before they can be charted.
+- [ ] **Live run monitoring** — stream round-by-round events (proposals, verdicts, admits, reflection) to a
+      JSONL event log that the dashboard tails / auto-refreshes, so a long run can be watched in progress.
+- [ ] **Cross-run library browser** — index many runs (a local dir or an S3 prefix), compare runs, surface
+      which alphas persist across runs, and dedup across them. Stateful enough to justify a small
+      **Streamlit** or **FastAPI** app.
+- [ ] **Run launcher (optional)** — configure and kick off a run from the UI (provider, universe, rounds,
+      N_JOBS) and show results when it finishes.
+
 ## Open — product & reporting
 
-- [ ] **Run report** — write a per-run HTML/Markdown summary (admitted alphas, train vs test metrics,
-      reflection log, deflated-Sharpe) alongside the JSON library.
+- [~] **Run report** — Markdown summary is written by `infra/run_job.py` (config, library, top test alphas).
+      Remaining: the richer HTML dashboard (see UI section) and a deflated-Sharpe column.
 - [ ] **Resume / merge libraries** — load an existing `alpha_library.json` and continue mining, or merge
       libraries from parallel runs (dedup across them).
 - [ ] **Phase 2: options** — options data panel (IV/greeks per underlying/expiry/strike) + a delta-hedged
