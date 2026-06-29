@@ -30,6 +30,3 @@ infra/local/out/
 .env
 *.key
 .claude/
-
-# Local-only agent context (kept on disk, not committed)
-CLAUDE.md

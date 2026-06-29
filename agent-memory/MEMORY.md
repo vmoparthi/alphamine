@@ -1,0 +1,1 @@
+- [Project goal: paper trading](project-goal-paper-trading.md) — target is paper trading via Alpaca, not live money; research→paper→maybe live
