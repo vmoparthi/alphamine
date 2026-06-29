@@ -18,9 +18,9 @@ expression (e.g. `rank(-1 * corr(close, volume, 5))`):
 - It avoids the leakage traps that sink news/agentic approaches (see §5).
 
 **The miner is model-agnostic.** Alpha generation is a *reasoning + code* task run a few hundred times per
-run, so generation quality matters more than throughput and token cost is small. A frontier API model
-(Claude or GPT) gives the best yield; local models (Ollama/vLLM) are a drop-in swap for privacy or cost via
-the single `LLMClient` interface (see §7.1).
+run, so generation quality matters more than throughput and token cost is small. A frontier API model gives
+the best yield; local open-source models are a drop-in swap for privacy or cost. Every backend sits behind
+one `LLMClient` interface, so the provider is a single config line (see §7.1).
 
 **Options support is Phase 2.** Options alpha mining needs a clean historical options chain (IV surface,
 greeks) and a more careful backtest (path-dependent P&L, delta hedging, bid/ask). The architecture drives
@@ -30,7 +30,7 @@ it with the *same* mining loop — only the data panel and evaluator change (see
 
 ## 2. System architecture
 
-![AlphaMine architecture: pluggable LLM backends (Mock / Claude / Bedrock / OpenAI / OSS) drive a clockwise mining loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt; the library is re-scored on a held-out test split to produce ranked alphas.](assets/architecture.svg)
+![AlphaMine architecture: pluggable LLM backends (Mock / Anthropic / OpenAI / Bedrock / local OSS) drive a clockwise mining loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt; the library is re-scored on a held-out test split to produce ranked alphas.](assets/architecture.svg)
 
 The loop runs clockwise. The **LLM client** (any backend — see §7.1) proposes new alpha expressions; each
 is **validated** (safe AST parse, no arbitrary `eval`) and **evaluated** on the data panel (Rank-IC + a
@@ -40,21 +40,39 @@ before they reach the **alpha library**, which admits a survivor only if it also
 whose lessons feed back into the next prompt — so the loop behaves like a guided evolutionary search with
 the LLM as the mutation operator (agentic layer in `agents.py`, ideas from TradingAgents).
 
-**Modules**
+### 2.1 Components — what each part does
 
-| File | Responsibility |
-|------|----------------|
-| `alphamine/data.py`    | Load daily OHLCV into aligned panels (dates × tickers). yfinance loader + deterministic **synthetic** fallback so everything runs offline. |
-| `alphamine/dsl.py`     | The alpha language: cross-sectional + time-series operators (`rank`, `delay`, `delta`, `corr`, `ts_mean`, `ts_std`, `scale`, …) implemented on pandas panels. |
-| `alphamine/alpha.py`   | `Alpha` object: holds the expression string, parses it to a signal panel via a **safe AST evaluator** (no `eval` of arbitrary Python). |
-| `alphamine/evaluate.py`| Turns a signal into performance: IC, Rank-IC, IR, a decile **long-short backtest** with costs → Sharpe, annual return, max drawdown, turnover. |
-| `alphamine/llm.py`     | `LLMClient` interface + pluggable backends: `MockClient` (offline), `AnthropicClient` (Claude API), `AnthropicBedrockClient` (Claude via AWS Bedrock), and `OpenAICompatClient` (OpenAI GPT + any OpenAI-compatible server — Ollama, vLLM, Groq, …). All share one `.propose()`. See §7.1. |
-| `alphamine/library.py` | Persistent alpha store (JSON). Admits a new alpha only if its signal correlation to every stored alpha is below a threshold → enforces **diversity**. |
-| `alphamine/miner.py`   | The loop: prompt → generate → parse → evaluate → risk-review → admit/reject → reflect → repeat. |
-| `alphamine/agents.py`  | Agentic layer (ideas from TradingAgents): a **reflection memory** that feeds per-round lessons into the next prompt, and a **risk-review critic** that vetoes look-ahead / cost-fragile alphas before admission. |
-| `alphamine/seeds.py`   | Small curated seed bank + `warm_start()` so you never start from a blank page. |
-| `alphamine/alpha101.py`| **All of WorldQuant's 101 Formulaic Alphas**, translated into the DSL (see §8). |
-| `run_demo.py`          | End-to-end offline demo. |
+- **`data.py` — market data.** Loads daily OHLCV into a `Panel`: one aligned DataFrame per field
+  (open/high/low/close/volume, plus derived returns/vwap), indexed by date × ticker, with a chronological
+  `split()` into train/valid/test. Ships a deterministic **synthetic** market (so the whole system runs with
+  no internet) and a real **yfinance** loader that cleans up delisted/short-history symbols.
+- **`dsl.py` — the alpha language.** Defines the operator vocabulary the LLM may use — cross-sectional
+  (`rank`, `scale`, `zscore`), time-series (`delay`, `delta`, `ts_mean`, `ts_std`, `ts_rank`, `corr`,
+  `decay_linear`, …), and arithmetic — each implemented as a vectorized function on pandas panels. Also holds
+  `DSL_SPEC`, the human-readable operator list injected into the prompt.
+- **`alpha.py` — expression → signal.** An `Alpha` wraps an expression string and turns it into a signal
+  panel through a **safe AST evaluator**: only whitelisted fields, numeric constants, and DSL operators are
+  allowed — never `eval` of arbitrary Python. Invalid or non-panel expressions raise `AlphaError`.
+- **`evaluate.py` — scoring.** Turns a signal into performance: IC / Rank-IC / ICIR, and a decile
+  **long-short backtest** with transaction costs → Sharpe, annual return, max drawdown, turnover. Includes a
+  `deflated_sharpe` helper (multiple-testing haircut) and `evaluate_many`, the process-pool parallel scorer.
+- **`library.py` — the alpha store.** `AlphaLibrary` decides what gets kept: an alpha is admitted only if it
+  clears the **quality** bar (Rank-IC / Sharpe) *and* the **novelty** gate (signal correlation below a
+  threshold vs every stored alpha). Tracks total trials (for the multiple-testing haircut) and persists to JSON.
+- **`llm.py` — the proposer.** One `LLMClient` interface with a `.propose(prompt)` method, plus pluggable
+  backends behind it (offline mock, Anthropic, Anthropic-on-Bedrock, and an OpenAI-compatible client covering
+  OpenAI and local/hosted open-source servers). `make_client(provider)` selects one. See §7.1.
+- **`agents.py` — the agentic layer** (ideas from TradingAgents). Two critics that make the search smarter: a
+  **reflection memory** that summarizes each round's lessons (which operators worked, why proposals failed)
+  and feeds them into the next prompt, and a **risk-review** critic that vetoes look-ahead-prone or
+  cost-fragile candidates before admission.
+- **`miner.py` — the loop.** Orchestrates a round: build the prompt → ask the proposer → validate → evaluate →
+  risk-review → admit/reject → reflect → repeat. `evaluate_on_test` does the final held-out re-score.
+- **`seeds.py` — warm start.** `warm_start()` evaluates a set of seed alphas and admits the good, diverse ones
+  before mining, so the LLM builds on a base instead of a blank page.
+- **`alpha101.py` — seed bank.** All of WorldQuant's 101 Formulaic Alphas translated into the DSL, ready to
+  warm-start with (see §8).
+- **`run_demo.py` — entry point.** End-to-end run with one config block (data source, provider, cost, parallelism).
 
 ---
 
@@ -133,10 +151,11 @@ python run_demo.py
 pip install 'alphamine[data]'        # or: pip install yfinance
 #   in run_demo.py: DATA_SOURCE = "yfinance"  (TICKERS already set)
 
-# Real data + real model:
-export ANTHROPIC_API_KEY=sk-...
+# Real data + a real model (any provider from §7.1):
 #   DATA_SOURCE  = "yfinance"
-#   LLM_PROVIDER = "anthropic"
+#   LLM_PROVIDER = "anthropic" | "openai" | "bedrock" | "ollama" | ...
+# then set that provider's credential, e.g.:
+export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY, AWS creds, a local server, ...
 ```
 
 The demo prints each round's admitted/rejected alphas with scores, then the final library re-scored on the
@@ -154,18 +173,18 @@ The miner is model-agnostic — every backend implements the same `.propose()` a
 | `LLM_PROVIDER` | Backend | Install | Auth |
 |----------------|---------|---------|------|
 | `mock` | Offline rotating pool (no network) | — | none |
-| `anthropic` | Claude direct API (defaults to `claude-opus-4-8`) | `pip install 'alphamine[llm]'` | `ANTHROPIC_API_KEY` |
-| `bedrock` | Claude via **Amazon Bedrock** (AWS auth + billing) | `pip install 'alphamine[bedrock]'` | AWS creds + `AWS_REGION` |
-| `openai` | **OpenAI** GPT models | `pip install 'alphamine[openai]'` | `OPENAI_API_KEY` |
+| `anthropic` | Anthropic API | `pip install 'alphamine[llm]'` | `ANTHROPIC_API_KEY` |
+| `bedrock` | Anthropic models via **Amazon Bedrock** (AWS auth + billing) | `pip install 'alphamine[bedrock]'` | AWS creds + `AWS_REGION` |
+| `openai` | OpenAI API | `pip install 'alphamine[openai]'` | `OPENAI_API_KEY` |
 | `groq` / `together` / `openrouter` | Hosted open-source gateways | `pip install 'alphamine[openai]'` | provider key (`GROQ_API_KEY`, …) |
 | `ollama` / `vllm` / `lmstudio` / `llamacpp` | **Local** open-source models | `pip install 'alphamine[openai]'` + run the server | none |
 | `local` / `openai-compat` | Any custom OpenAI-compatible endpoint (pass `base_url`) | `pip install 'alphamine[openai]'` | optional |
 
 ```python
-# run_demo.py — examples
-LLM_PROVIDER = "anthropic"; LLM_KWARGS = {}                                  # -> claude-opus-4-8
-LLM_PROVIDER = "bedrock";   LLM_KWARGS = {"model": "anthropic.claude-opus-4-8"}
+# run_demo.py — examples (model id goes in LLM_KWARGS; each provider has a sensible default)
+LLM_PROVIDER = "anthropic"; LLM_KWARGS = {"model": "claude-opus-4-8"}
 LLM_PROVIDER = "openai";    LLM_KWARGS = {"model": "gpt-4o"}
+LLM_PROVIDER = "bedrock";   LLM_KWARGS = {"model": "anthropic.claude-opus-4-8"}
 LLM_PROVIDER = "ollama";    LLM_KWARGS = {"model": "llama3.1"}               # local, free, private
 LLM_PROVIDER = "groq";      LLM_KWARGS = {"model": "llama-3.3-70b-versatile"}
 ```
@@ -183,7 +202,7 @@ The system has two independent compute axes that scale very differently:
 
 - **LLM inference (the proposer)** is *not* the bottleneck for serious mining — even hundreds of rounds is a
   few hundred calls. Use a frontier model for quality: an API (`anthropic`/`openai`) or **AWS Bedrock**
-  (`LLM_PROVIDER="bedrock"` — managed Claude on your AWS account, no GPU to run). Stand up a GPU box
+  (`LLM_PROVIDER="bedrock"` — managed models on your AWS account, no GPU to run). Stand up a GPU box
   (local, or AWS `g5`/`g6` + vLLM) only if you want fully-private OSS inference at speed.
 - **Evaluation (the backtest)** *is* the bottleneck at scale — scoring thousands of candidate alphas over a
   large universe. It's embarrassingly parallel, so it runs across all CPU cores: set `N_JOBS` in
@@ -226,12 +245,10 @@ alpha whose fields don't exist there.
 
 ## 9. Roadmap
 
-- [ ] Phase 1: this scaffold → swap in real OHLCV (yfinance) and a real API model.
-- [ ] Add neutralization (sector/beta) to operators.
-- [ ] Add Deflated Sharpe gate before admission.
-- [ ] Combine top-K alphas into a meta-signal (equal-risk or regression blend).
-- [ ] Phase 2: options data panel + delta-hedged evaluator.
-- [ ] Optional: port the backtest to Qlib for a battle-tested engine.
+Done so far: the offline scaffold, the Alpha101 seed bank, multi-provider LLM access, the real-data
+(yfinance) loader, the agentic layer (reflection + risk-review), and parallel evaluation. Open items —
+including the Deflated-Sharpe gate, sector/beta neutralization, a meta-signal blend, a big-universe data
+loader, the AWS deployment (`infra/`), and Phase 2 options — are tracked in **[BACKLOG.md](BACKLOG.md)**.
 
 > Not investment advice. Backtested edges routinely vanish live — treat every result as a hypothesis until
 > validated out-of-sample and forward-tested.

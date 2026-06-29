@@ -30,7 +30,7 @@
   <rect class="b-purple" x="52"  y="86" width="60" height="26" rx="4"/>
   <text class="ts tt-purple" x="82"  y="103" text-anchor="middle">Mock</text>
   <rect class="b-purple" x="122" y="86" width="60" height="26" rx="4"/>
-  <text class="ts tt-purple" x="152" y="103" text-anchor="middle">Claude</text>
+  <text class="ts tt-purple" x="152" y="103" text-anchor="middle">Anthropic</text>
   <rect class="b-purple" x="192" y="86" width="60" height="26" rx="4"/>
   <text class="ts tt-purple" x="222" y="103" text-anchor="middle">Bedrock</text>
   <rect class="b-purple" x="262" y="86" width="60" height="26" rx="4"/>

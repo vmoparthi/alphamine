@@ -1,0 +1,84 @@
+# AlphaMine — Backlog
+
+Planned work, roughly in priority order. Checked items are done and live on `main`;
+unchecked items are open. See the README for what the system currently does.
+
+---
+
+## Done
+
+- [x] **Runnable offline scaffold** — synthetic data + mock proposer, full propose→evaluate→admit loop.
+- [x] **WorldQuant Alpha101 seed bank** — all 100 usable factors translated into the DSL.
+- [x] **Multi-provider LLM access** — one `LLMClient` interface with offline / Anthropic / Anthropic-on-Bedrock /
+      OpenAI-compatible (OpenAI, Ollama, vLLM, LM Studio, llama.cpp, Together, Groq, OpenRouter) backends.
+- [x] **One-shot JSON repair** — API-backed clients re-ask once on an unparseable reply (helps small local models).
+- [x] **Real data (yfinance)** — robust loader: drops bad/delisted/short-history tickers, preserves order,
+      clear errors; validated end-to-end on real OHLCV.
+- [x] **Agentic layer** (`agents.py`) — reflection memory (per-round lessons) + risk-review critic
+      (vetoes look-ahead / cost-fragile alphas before admission).
+- [x] **Parallel evaluation** — process-pool `evaluate_many`; large-universe sweeps fan out across cores,
+      small runs stay sequential. `N_JOBS` knob.
+
+---
+
+## Open — modeling & research
+
+- [ ] **Deflated Sharpe admission gate** — apply the multiple-testing haircut (`evaluate.deflated_sharpe`)
+      as a hard gate before an alpha enters the library, using the library's trial count.
+- [ ] **Neutralization operators** — real sector/beta neutralization in the DSL (today `indneutralize` is a
+      cross-sectional demean approximation; ship sector labels and a proper grouping).
+- [ ] **Meta-signal blend** — combine the top-K admitted alphas into one signal (equal-risk or regression
+      blend) and score the blend on the held-out test split.
+- [ ] **Frontier-model mining run** — a longer run (many rounds) with a frontier API model to actually try to
+      out-propose the seed bank; record results.
+- [ ] **LLM-written reflection** — replace the heuristic reflection summary with an LLM-authored critique
+      (hook: `agents.reflect_with_llm`); optionally a proposer-vs-critic debate round.
+- [ ] **Validation-split usage** — currently train/test only; use the `valid` split for hyperparameter / gate
+      tuning so `test` stays truly untouched.
+
+## Open — data & scale
+
+- [ ] **Big-universe data loader** — bulk OHLCV source (e.g. Stooq bulk, Nasdaq Data Link, a vendor feed) with
+      a local **parquet cache**, so Russell-3000-scale runs work without yfinance's per-ticker rate limits.
+- [ ] **Point-in-time universe** — survivorship-bias-free membership (handle listings/delistings per date).
+- [ ] **Backtest engine option** — optional port of the long-short backtest to Qlib for a battle-tested engine.
+
+## Open — infrastructure (AWS deployment) → `infra/`
+
+Goal: one-command deploy of a mining run on AWS. Target an `infra/` folder with IaC + container artifacts.
+
+- [ ] **Container image** — `infra/Dockerfile` packaging the package + deps (`[all]` extra); entrypoint runs a
+      configurable mining job (env-driven: provider, tickers, dates, rounds, N_JOBS).
+- [ ] **Artifact store** — S3 bucket for inputs (parquet panels) and outputs (`alpha_library.json`, run logs,
+      ranked-alpha report). Run writes results to `s3://…/runs/<timestamp>/`.
+- [ ] **Compute** — choose per workload:
+      - **Evaluation-heavy:** AWS Batch or a one-shot ECS Fargate / EC2 `c7i` task (high vCPU) for the
+        parallel backtest sweep. This is where the compute budget goes.
+      - **Proposer:** **Amazon Bedrock** (managed models, no GPU) via the existing `bedrock` provider — IAM
+        role with `bedrock:InvokeModel` + model access enabled in-region.
+      - **Private OSS inference (optional):** EC2 `g5`/`g6` + vLLM, exposed to the job as an
+        OpenAI-compatible endpoint (`base_url`).
+- [ ] **IaC** — `infra/` Terraform (or CDK): S3 bucket, IAM roles (Bedrock invoke + S3 RW), the Batch/ECS
+      job definition, and a parameterized launch (provider, model, universe, dates, rounds).
+- [ ] **Scheduling (optional)** — EventBridge rule to run a nightly/weekly mining job and publish the report.
+- [ ] **Secrets** — API keys (non-Bedrock providers) via AWS Secrets Manager / SSM Parameter Store, injected
+      as env vars; never baked into the image.
+- [ ] **Cost guardrails** — spot instances for eval, a max-rounds / max-spend cap, auto-teardown after the run.
+
+## Open — product & reporting
+
+- [ ] **Run report** — write a per-run HTML/Markdown summary (admitted alphas, train vs test metrics,
+      reflection log, deflated-Sharpe) alongside the JSON library.
+- [ ] **Resume / merge libraries** — load an existing `alpha_library.json` and continue mining, or merge
+      libraries from parallel runs (dedup across them).
+- [ ] **Phase 2: options** — options data panel (IV/greeks per underlying/expiry/strike) + a delta-hedged
+      option-P&L evaluator; the same mining loop drives it (only data panel + evaluator change).
+
+---
+
+## Notes
+
+- **Not investment advice.** Every result is a hypothesis until validated out-of-sample and forward-tested.
+- Keep the core dependency-light (numpy + pandas); provider SDKs and data sources stay optional extras.
+- Preserve the safety invariants when extending: no raw `eval`, no look-ahead, mine on `train` only, trust
+  only `test`. (See the README anti-leakage section.)
