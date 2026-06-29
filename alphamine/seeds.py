@@ -61,21 +61,26 @@ def load_seeds(panel) -> List[Alpha]:
 
 
 def warm_start(library, panel, cost_bps: float = 5.0, verbose: bool = True,
-               alphas=None) -> int:
+               alphas=None, n_jobs: int = None) -> int:
     """Evaluate seed alphas and admit the ones that pass the library's gates.
 
     Returns the number admitted. Run this BEFORE mine() to give the LLM a base to build on.
     Pass `alphas=` to seed from a custom list (e.g. alpha101.load_alpha101(panel));
     defaults to the small curated bank in this module.
+
+    The (expensive) metrics pass over all seeds runs in parallel across CPU cores
+    (`n_jobs`, default all); admission stays sequential because the library's
+    novelty gate depends on what's already been admitted.
     """
-    from .evaluate import evaluate
+    from .evaluate import evaluate_many
 
     if alphas is None:
         alphas = load_seeds(panel)
     admitted = 0
-    for alpha in alphas:
+    for alpha, metrics in evaluate_many(alphas, panel, cost_bps=cost_bps, n_jobs=n_jobs):
+        if metrics is None:
+            continue
         try:
-            metrics = evaluate(alpha, panel, cost_bps=cost_bps)
             verdict = library.consider(alpha, metrics, alpha.evaluate(panel))
         except Exception:
             continue

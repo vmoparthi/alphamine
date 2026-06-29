@@ -177,6 +177,23 @@ valid DSL/JSON less reliably than frontier models; to cushion this, every API-ba
 JSON repair** — if a reply can't be parsed into alpha objects, it re-asks once with a stricter instruction
 before giving up. Expect a somewhat lower yield of admitted alphas per round on small models regardless.
 
+### 7.2 Running at scale
+
+The system has two independent compute axes that scale very differently:
+
+- **LLM inference (the proposer)** is *not* the bottleneck for serious mining — even hundreds of rounds is a
+  few hundred calls. Use a frontier model for quality: an API (`anthropic`/`openai`) or **AWS Bedrock**
+  (`LLM_PROVIDER="bedrock"` — managed Claude on your AWS account, no GPU to run). Stand up a GPU box
+  (local, or AWS `g5`/`g6` + vLLM) only if you want fully-private OSS inference at speed.
+- **Evaluation (the backtest)** *is* the bottleneck at scale — scoring thousands of candidate alphas over a
+  large universe. It's embarrassingly parallel, so it runs across all CPU cores: set `N_JOBS` in
+  `run_demo.py` (or pass `n_jobs=` to `warm_start` / `evaluate_on_test`). The panel is shipped to each
+  worker once; small universes auto-stay sequential (no overhead), large ones fan out. Put your "power
+  machine" budget into a high-core box (e.g. AWS `c7i.8xlarge`) for the evaluation sweep.
+
+For Russell-3000-scale runs you'll also want a bulk OHLCV source + a parquet cache rather than yfinance,
+which rate-limits at thousands of tickers (roadmap item).
+
 ---
 
 ## 8. WorldQuant Alpha101 seed bank

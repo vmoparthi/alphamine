@@ -9,8 +9,10 @@ We lag the signal by one day before trading so we never use t's close to trade t
 """
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, asdict
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -117,6 +119,63 @@ def evaluate(alpha, panel, cost_bps=5.0) -> Metrics:
         turnover=round(float(bt["turnover"].mean()), 3) if len(pnl) else 0.0,
         n_obs=int(len(pnl)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Parallel evaluation. Scoring N independent alphas on one panel is
+# embarrassingly parallel — the only heavy object is the panel, so we ship it
+# to each worker ONCE via the pool initializer and map cheap Alpha (expr string)
+# objects across the workers. This is the main lever for large-universe sweeps.
+# ---------------------------------------------------------------------------
+
+_WORKER_PANEL = None       # set once per worker process via _init_worker
+_WORKER_COST = 5.0
+
+
+def _init_worker(panel, cost_bps):
+    global _WORKER_PANEL, _WORKER_COST
+    _WORKER_PANEL = panel
+    _WORKER_COST = cost_bps
+
+
+def _eval_one(alpha) -> Tuple[object, Optional["Metrics"]]:
+    try:
+        return alpha, evaluate(alpha, _WORKER_PANEL, cost_bps=_WORKER_COST)
+    except Exception:
+        return alpha, None  # bad expr / scalar result -> caller skips it
+
+
+def evaluate_many(alphas, panel, cost_bps: float = 5.0,
+                  n_jobs: Optional[int] = None) -> List[Tuple[object, Optional["Metrics"]]]:
+    """Evaluate many alphas on one panel, in parallel across processes.
+
+    Returns ``[(alpha, metrics_or_None), ...]`` in the same order as ``alphas``
+    (None for any alpha that failed to evaluate). ``n_jobs`` defaults to all CPU
+    cores; ``n_jobs=1`` forces the sequential path. Small batches stay sequential
+    to avoid process-pool startup cost dominating.
+    """
+    alphas = list(alphas)
+    if n_jobs is None:
+        n_jobs = os.cpu_count() or 1
+
+    # Only fan out when the work justifies the process-pool + panel-pickling
+    # overhead. Tiny universes (the offline demo) stay sequential automatically;
+    # large-universe sweeps parallelize. Roughly: cells-per-eval * #alphas.
+    cells = len(panel.index) * max(1, len(panel.tickers))
+    work = len(alphas) * cells
+    if n_jobs <= 1 or len(alphas) < 4 or work < 5_000_000:
+        out = []
+        for a in alphas:
+            try:
+                out.append((a, evaluate(a, panel, cost_bps=cost_bps)))
+            except Exception:
+                out.append((a, None))
+        return out
+
+    chunk = max(1, len(alphas) // (n_jobs * 4))
+    with ProcessPoolExecutor(max_workers=n_jobs, initializer=_init_worker,
+                             initargs=(panel, cost_bps)) as ex:
+        return list(ex.map(_eval_one, alphas, chunksize=chunk))
 
 
 def signal_correlation(a_sig: pd.DataFrame, b_sig: pd.DataFrame) -> float:

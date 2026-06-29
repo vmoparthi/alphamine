@@ -14,7 +14,7 @@ from typing import List
 from . import dsl
 from .agents import ReflectiveMemory, risk_review
 from .alpha import Alpha, AlphaError, validate
-from .evaluate import evaluate
+from .evaluate import evaluate, evaluate_many
 from .library import AlphaLibrary
 from .llm import LLMClient
 
@@ -122,14 +122,15 @@ def mine(library: AlphaLibrary, client: LLMClient, train_panel,
     return library
 
 
-def evaluate_on_test(library: AlphaLibrary, test_panel, cost_bps: float = 5.0):
-    """Re-score the final library on the held-out test window. The only honest number."""
-    results = []
-    for e in library.entries:
-        try:
-            m = evaluate(e.alpha, test_panel, cost_bps=cost_bps)
-            results.append((e.alpha, m))
-        except AlphaError:
-            continue
+def evaluate_on_test(library: AlphaLibrary, test_panel, cost_bps: float = 5.0,
+                     n_jobs: int = None):
+    """Re-score the final library on the held-out test window. The only honest number.
+
+    Parallelized across CPU cores (`n_jobs`, default all) — re-scoring is pure
+    metrics with no shared state, so it's an unconditional win at scale.
+    """
+    scored = evaluate_many((e.alpha for e in library.entries), test_panel,
+                           cost_bps=cost_bps, n_jobs=n_jobs)
+    results = [(a, m) for a, m in scored if m is not None]
     results.sort(key=lambda x: abs(x[1].rank_ic), reverse=True)
     return results
