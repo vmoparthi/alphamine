@@ -161,8 +161,10 @@ LLM_PROVIDER = "groq";      LLM_KWARGS = {"model": "llama-3.3-70b-versatile"}
 
 Open-source stacks (Ollama, vLLM, LM Studio, llama.cpp, Together, Groq, OpenRouter) are all reached through
 a single `OpenAICompatClient` — they expose an OpenAI-compatible `/chat/completions` endpoint, so switching
-between them is just a provider name (and `base_url` for anything custom). Note: smaller local models (7–8B)
-emit valid DSL/JSON less reliably than frontier models, so expect a lower yield of admitted alphas per round.
+between them is just a provider name (and `base_url` for anything custom). Smaller local models (7–8B) emit
+valid DSL/JSON less reliably than frontier models; to cushion this, every API-backed client does a **one-shot
+JSON repair** — if a reply can't be parsed into alpha objects, it re-asks once with a stricter instruction
+before giving up. Expect a somewhat lower yield of admitted alphas per round on small models regardless.
 
 ---
 

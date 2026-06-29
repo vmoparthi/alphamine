@@ -12,7 +12,9 @@ Interface: .propose(prompt) -> list[{"expr": str, "rationale": str}]
                      LM Studio, llama.cpp --server, Together, Groq, OpenRouter — by pointing
                      `base_url` at the right server. Needs `pip install openai`.
 
-Every backend implements the same .propose() so they are drop-in swaps.
+Every backend implements the same .propose() so they are drop-in swaps. The API-backed
+clients share a one-shot JSON repair: if a reply can't be parsed into alpha objects, they
+re-ask once with a stricter instruction before giving up (helps smaller local models).
 """
 from __future__ import annotations
 
@@ -20,6 +22,19 @@ import json
 import os
 import re
 from typing import Dict, List
+
+
+_PROPOSE_SYSTEM = (
+    "You are a quant researcher inventing formulaic alpha factors. "
+    "Reply ONLY with a JSON array of objects, each {\"expr\": <DSL expression>, "
+    "\"rationale\": <one short sentence>}. No prose outside the JSON."
+)
+
+# Appended to the prompt on the one repair attempt when the first reply didn't parse.
+_REPAIR_SUFFIX = (
+    "\n\nIMPORTANT: your previous reply could not be parsed. Reply with ONLY a JSON array "
+    "of {\"expr\": ..., \"rationale\": ...} objects — no prose, no markdown fences, nothing else."
+)
 
 
 class LLMClient:
@@ -46,6 +61,25 @@ def _extract_json_array(text: str) -> List[Dict[str, str]]:
         if isinstance(item, dict) and "expr" in item:
             out.append({"expr": str(item["expr"]), "rationale": str(item.get("rationale", ""))})
     return out
+
+
+class _ApiClient(LLMClient):
+    """Base for network-backed clients: shared propose() with one-shot JSON repair.
+
+    Subclasses implement `_complete(user_content) -> raw_text`; `propose` parses it and,
+    if nothing parsed, re-asks once with `_REPAIR_SUFFIX` appended before returning.
+    """
+
+    model: str
+
+    def _complete(self, user_content: str) -> str:
+        raise NotImplementedError
+
+    def propose(self, prompt: str, n: int = 5) -> List[Dict[str, str]]:
+        items = _extract_json_array(self._complete(prompt))
+        if not items:  # one repair attempt — cheap insurance against an unparseable reply
+            items = _extract_json_array(self._complete(prompt + _REPAIR_SUFFIX))
+        return items[:n]
 
 
 class MockClient(LLMClient):
@@ -78,21 +112,20 @@ class MockClient(LLMClient):
         return out
 
 
-class AnthropicClient(LLMClient):
+class AnthropicClient(_ApiClient):
     def __init__(self, model: str = "claude-opus-4-8", api_key: str | None = None):
         from anthropic import Anthropic  # local import; optional dependency
         self.client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
         self.model = model
 
-    def propose(self, prompt: str, n: int = 5) -> List[Dict[str, str]]:
+    def _complete(self, user_content: str) -> str:
         msg = self.client.messages.create(
             model=self.model,
             max_tokens=1500,
             system=_PROPOSE_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": user_content}],
         )
-        text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
-        return _extract_json_array(text)[:n]
+        return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
 
 
 class AnthropicBedrockClient(AnthropicClient):
@@ -113,13 +146,6 @@ class AnthropicBedrockClient(AnthropicClient):
         self.model = model
 
 
-_PROPOSE_SYSTEM = (
-    "You are a quant researcher inventing formulaic alpha factors. "
-    "Reply ONLY with a JSON array of objects, each {\"expr\": <DSL expression>, "
-    "\"rationale\": <one short sentence>}. No prose outside the JSON."
-)
-
-
 # Convenience presets for the common open-source / hosted OpenAI-compatible servers.
 # Each maps to (base_url, env var holding the API key — None means no key needed).
 _OPENAI_COMPAT_PRESETS = {
@@ -134,7 +160,7 @@ _OPENAI_COMPAT_PRESETS = {
 }
 
 
-class OpenAICompatClient(LLMClient):
+class OpenAICompatClient(_ApiClient):
     """Any OpenAI-compatible chat endpoint — local open-source models or hosted gateways.
 
     Examples:
@@ -170,18 +196,17 @@ class OpenAICompatClient(LLMClient):
         self.model = model
         self.temperature = temperature
 
-    def propose(self, prompt: str, n: int = 5) -> List[Dict[str, str]]:
+    def _complete(self, user_content: str) -> str:
         resp = self.client.chat.completions.create(
             model=self.model,
             temperature=self.temperature,
             max_tokens=1500,
             messages=[
                 {"role": "system", "content": _PROPOSE_SYSTEM},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": user_content},
             ],
         )
-        text = resp.choices[0].message.content or ""
-        return _extract_json_array(text)[:n]
+        return resp.choices[0].message.content or ""
 
 
 def make_client(provider: str = "mock", **kwargs) -> LLMClient:
