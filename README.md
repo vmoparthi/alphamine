@@ -48,7 +48,8 @@ the loop behaves like a guided evolutionary search with the LLM as the mutation 
 | `alphamine/evaluate.py`| Turns a signal into performance: IC, Rank-IC, IR, a decile **long-short backtest** with costs → Sharpe, annual return, max drawdown, turnover. |
 | `alphamine/llm.py`     | `LLMClient` interface + pluggable backends: `MockClient` (offline), `AnthropicClient` (Claude API), `AnthropicBedrockClient` (Claude via AWS Bedrock), and `OpenAICompatClient` (OpenAI GPT + any OpenAI-compatible server — Ollama, vLLM, Groq, …). All share one `.propose()`. See §7.1. |
 | `alphamine/library.py` | Persistent alpha store (JSON). Admits a new alpha only if its signal correlation to every stored alpha is below a threshold → enforces **diversity**. |
-| `alphamine/miner.py`   | The loop: prompt → generate → parse → evaluate → admit/reject → build feedback → repeat. |
+| `alphamine/miner.py`   | The loop: prompt → generate → parse → evaluate → risk-review → admit/reject → reflect → repeat. |
+| `alphamine/agents.py`  | Agentic layer (ideas from TradingAgents): a **reflection memory** that feeds per-round lessons into the next prompt, and a **risk-review critic** that vetoes look-ahead / cost-fragile alphas before admission. |
 | `alphamine/seeds.py`   | Small curated seed bank + `warm_start()` so you never start from a blank page. |
 | `alphamine/alpha101.py`| **All of WorldQuant's 101 Formulaic Alphas**, translated into the DSL (see §8). |
 | `run_demo.py`          | End-to-end offline demo. |

@@ -27,3 +27,4 @@ alpha_library.json
 # Env / secrets
 .env
 *.key
+.claude/
