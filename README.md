@@ -30,7 +30,7 @@ it with the *same* mining loop — only the data panel and evaluator change (see
 
 ## 2. System architecture
 
-![AlphaMine architecture: a clockwise miner loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt.](assets/architecture.svg)
+![AlphaMine architecture: pluggable LLM backends (Mock / Claude / Bedrock / OpenAI / OSS) drive a clockwise mining loop where the LLM client proposes alpha expressions, which are validated and evaluated against a data panel, screened by a risk-review critic, admitted to a correlation-deduplicated alpha library, and distilled into a reflection memory whose lessons feed back into the next prompt; the library is re-scored on a held-out test split to produce ranked alphas.](assets/architecture.svg)
 
 The loop runs clockwise. The **LLM client** (any backend — see §7.1) proposes new alpha expressions; each
 is **validated** (safe AST parse, no arbitrary `eval`) and **evaluated** on the data panel (Rank-IC + a
